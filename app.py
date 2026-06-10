@@ -36,7 +36,7 @@ st.set_page_config(
 )
 
 
-APP_VERSION = "0.2.3-click-peak-selection"
+APP_VERSION = "0.2.5-click-plot-fix"
 
 
 def _format_metric(value: float, unit: str = "", precision: int = 4) -> str:
@@ -139,8 +139,12 @@ def plot_ringdown(
     fig = go.Figure()
     if len(t_win):
         t_plot, y_plot = decimate_for_plot(t_win, y_win, max_points=max_points)
+        # Use regular Scatter here instead of Scattergl.
+        # The streamlit-plotly-events component is more reliable with SVG traces
+        # for click selection; Scattergl can make the chart render as an empty
+        # default axis in some Plotly/Streamlit combinations.
         fig.add_trace(
-            go.Scattergl(
+            go.Scatter(
                 x=t_plot * 1e6,
                 y=y_plot,
                 mode="lines",
@@ -488,8 +492,12 @@ def plot_ringdown_with_envelope(
     fig = go.Figure()
     if len(t_win):
         t_plot, y_plot = decimate_for_plot(t_win, y_win, max_points=max_points)
+        # Use regular Scatter here instead of Scattergl.
+        # The streamlit-plotly-events component is more reliable with SVG traces
+        # for click selection; Scattergl can make the chart render as an empty
+        # default axis in some Plotly/Streamlit combinations.
         fig.add_trace(
-            go.Scattergl(
+            go.Scatter(
                 x=t_plot * 1e6,
                 y=y_plot,
                 mode="lines",
@@ -510,7 +518,7 @@ def plot_ringdown_with_envelope(
                 y=peak_df["amplitude"],
                 mode="markers",
                 name="picos clicáveis",
-                customdata=peak_df[["peak_id"]],
+                customdata=peak_df[["peak_id"]].to_numpy(),
                 selectedpoints=selected_point_indices if selected_point_indices else None,
                 marker=dict(size=10),
                 selected=dict(marker=dict(size=15)),
@@ -554,16 +562,53 @@ def plot_ringdown_with_envelope(
             )
         )
 
+    # Force a meaningful view. Without explicit ranges, some combinations of
+    # streamlit-plotly-events + Plotly can render an empty default axis even
+    # when the peak table is populated.
+    x_values = []
+    y_values = []
+    if len(t_win):
+        x_values.extend((t_win * 1e6).astype(float).tolist())
+        y_values.extend(y_win.astype(float).tolist())
+    if not peak_df.empty:
+        x_values.extend(peak_df["tempo_us"].astype(float).tolist())
+        y_values.extend(peak_df["amplitude"].astype(float).tolist())
+    if not fit_df.empty:
+        x_values.extend(fit_df["tempo_us"].astype(float).tolist())
+        y_values.extend(fit_df["amplitude"].astype(float).tolist())
+
+    x_range = None
+    if np.isfinite(start_us) and np.isfinite(end_us) and end_us > start_us:
+        x_range = [float(start_us), float(end_us)]
+    elif x_values:
+        x_min = float(np.nanmin(x_values))
+        x_max = float(np.nanmax(x_values))
+        pad = max((x_max - x_min) * 0.05, 1.0)
+        x_range = [x_min - pad, x_max + pad]
+
+    y_range = None
+    y_arr = np.asarray(y_values, dtype=float) if y_values else np.array([], dtype=float)
+    y_arr = y_arr[np.isfinite(y_arr)]
+    if y_arr.size:
+        y_min = float(np.nanmin(y_arr))
+        y_max = float(np.nanmax(y_arr))
+        if np.isclose(y_min, y_max):
+            pad = max(abs(y_max) * 0.25, 1.0)
+        else:
+            pad = max((y_max - y_min) * 0.10, 1.0)
+        y_range = [y_min - pad, y_max + pad]
+
     fig.update_layout(
         height=580,
         xaxis_title="Tempo (µs)",
         yaxis_title="Amplitude corrigida",
         hovermode="closest",
+        clickmode="event+select",
         dragmode="zoom",
         margin=dict(l=40, r=20, t=40, b=40),
     )
-    fig.update_xaxes(showgrid=True)
-    fig.update_yaxes(showgrid=True)
+    fig.update_xaxes(showgrid=True, range=x_range)
+    fig.update_yaxes(showgrid=True, range=y_range)
     return fig
 
 
@@ -772,7 +817,7 @@ with tab_signal:
             "V × I / potência",
         ],
         horizontal=True,
-        key="signal_analysis_mode_v023",
+        key="signal_analysis_mode_v025",
     )
 
     if analysis_mode == "Visão geral / formas de onda":
@@ -782,29 +827,29 @@ with tab_signal:
             "Sinais para plotar",
             [item["name"] for item in waveforms],
             default=[item["name"] for item in waveforms[: min(4, len(waveforms))]],
-            key="overview_selected_signals_v023",
+            key="overview_selected_signals_v025",
         )
         normalize = col_b.checkbox(
             "Normalizar pelo pico absoluto",
             value=False,
-            key="overview_normalize_v023",
+            key="overview_normalize_v025",
         )
         corrected_overview = col_c.checkbox(
             "Subtrair linha de base",
             value=False,
-            key="overview_corrected_v023",
+            key="overview_corrected_v025",
         )
 
         col_d, col_e = st.columns(2)
         use_custom_window = col_d.checkbox(
             "Limitar janela temporal",
             value=False,
-            key="overview_window_enable_v023",
+            key="overview_window_enable_v025",
         )
         use_ring_window = col_e.checkbox(
             "Usar janela de ringing",
             value=False,
-            key="overview_ring_window_v023",
+            key="overview_ring_window_v025",
             disabled=not use_custom_window,
         )
 
@@ -814,13 +859,13 @@ with tab_signal:
                 "Início da janela de visualização (µs)",
                 value=ring_start_us,
                 step=1.0,
-                key="overview_start_us_v023",
+                key="overview_start_us_v025",
             )
             overview_end_us = win_cols[1].number_input(
                 "Fim da janela de visualização (µs)",
                 value=ring_end_us,
                 step=1.0,
-                key="overview_end_us_v023",
+                key="overview_end_us_v025",
             )
         elif use_custom_window and use_ring_window:
             overview_start_us = ring_start_us
@@ -845,13 +890,13 @@ with tab_signal:
             st.plotly_chart(
                 fig,
                 use_container_width=True,
-                key="overview_waveform_chart_v023",
+                key="overview_waveform_chart_v025",
             )
 
         selected_metric_name = st.selectbox(
             "Sinal para resumo individual",
             [item["name"] for item in waveforms],
-            key="overview_metric_signal_v023",
+            key="overview_metric_signal_v025",
         )
         selected_metrics = next(row for row in metrics if row["arquivo"] == selected_metric_name)
         cols = st.columns(5)
@@ -880,7 +925,7 @@ with tab_signal:
         ring_name = control_cols[0].selectbox(
             "Sinal para análise",
             [item["name"] for item in waveforms],
-            key="envelope_select_signal_v023",
+            key="envelope_select_signal_v025",
         )
         n_fit_peaks = control_cols[1].number_input(
             "N picos para ajuste",
@@ -888,24 +933,24 @@ with tab_signal:
             max_value=12,
             value=3,
             step=1,
-            key="envelope_n_peaks_v023",
+            key="envelope_n_peaks_v025",
             help="Use 3 para o teste inicial; aumente para robustez estatística quando houver mais picos limpos.",
         )
         polarity = control_cols[2].selectbox(
             "Picos usados",
             ["Extremos positivos e negativos", "Somente positivos", "Somente negativos"],
-            key="envelope_polarity_v023",
+            key="envelope_polarity_v025",
         )
         normalize_env = control_cols[3].checkbox(
             "Comparar envoltórias normalizadas",
             value=True,
-            key="envelope_normalized_compare_v023",
+            key="envelope_normalized_compare_v025",
         )
 
-        previous_ring_name = st.session_state.get("envelope_selected_signal_name_v023")
+        previous_ring_name = st.session_state.get("envelope_selected_signal_name_v025")
         if previous_ring_name != ring_name:
-            st.session_state["envelope_selected_signal_name_v023"] = ring_name
-            st.session_state["envelope_selected_peak_ids_v023"] = []
+            st.session_state["envelope_selected_signal_name_v025"] = ring_name
+            st.session_state["envelope_selected_peak_ids_v025"] = []
 
         ring_item = next(item for item in waveforms if item["name"] == ring_name)
         peak_df = add_peak_ids(
@@ -921,7 +966,7 @@ with tab_signal:
         )
 
         placeholder_env, placeholder_table = st.columns([2, 1])
-        selected_ids = st.session_state.get("envelope_selected_peak_ids_v023", [])
+        selected_ids = st.session_state.get("envelope_selected_peak_ids_v025", [])
         envelope_metrics, fit_df = fit_exponential_envelope(
             peak_df,
             n_peaks=int(n_fit_peaks),
@@ -950,13 +995,13 @@ with tab_signal:
                     select_event=False,
                     override_height=580,
                     override_width="100%",
-                    key="envelope_clickable_chart_v023",
+                    key="envelope_clickable_chart_v025",
                 )
                 changed = toggle_peak_selection_from_clicks(
                     clicked_points,
                     peak_df,
-                    selected_state_key="envelope_selected_peak_ids_v023",
-                    last_click_state_key="envelope_last_click_signature_v023",
+                    selected_state_key="envelope_selected_peak_ids_v025",
+                    last_click_state_key="envelope_last_click_signature_v025",
                 )
                 if changed:
                     st.rerun()
@@ -968,21 +1013,21 @@ with tab_signal:
                 selection_state = st.plotly_chart(
                     fig_env,
                     use_container_width=True,
-                    key="envelope_selectable_chart_v023",
+                    key="envelope_selectable_chart_v025",
                     on_select="rerun",
                     selection_mode=("points",),
                 )
                 new_selected_ids = extract_selected_peak_ids(selection_state)
                 if new_selected_ids != selected_ids:
-                    st.session_state["envelope_selected_peak_ids_v023"] = new_selected_ids
+                    st.session_state["envelope_selected_peak_ids_v025"] = new_selected_ids
                     st.rerun()
 
         with placeholder_table:
             st.markdown("**Picos selecionados**")
             if selected_ids:
                 st.success(f"{len(selected_ids)} pico(s) selecionado(s) por clique.")
-                if st.button("Limpar seleção", key="clear_envelope_selection_v023"):
-                    st.session_state["envelope_selected_peak_ids_v023"] = []
+                if st.button("Limpar seleção", key="clear_envelope_selection_v025"):
+                    st.session_state["envelope_selected_peak_ids_v025"] = []
                     st.rerun()
             else:
                 st.info(f"Sem clique manual: usando últimos {int(n_fit_peaks)} picos.")
@@ -1008,7 +1053,7 @@ with tab_signal:
             "Arquivos para comparar",
             [item["name"] for item in waveforms],
             default=[item["name"] for item in waveforms],
-            key="envelope_compare_files_v023",
+            key="envelope_compare_files_v025",
         )
 
         envelope_rows = []
@@ -1040,7 +1085,7 @@ with tab_signal:
         st.plotly_chart(
             fig_cmp,
             use_container_width=True,
-            key="envelope_comparison_chart_v023",
+            key="envelope_comparison_chart_v025",
         )
         st.dataframe(envelope_df, use_container_width=True)
 
@@ -1049,7 +1094,7 @@ with tab_signal:
             data=envelope_df.to_csv(index=False).encode("utf-8"),
             file_name="metricas_envoltoria_exponencial.csv",
             mime="text/csv",
-            key="download_envelope_metrics_v023",
+            key="download_envelope_metrics_v025",
         )
 
         with st.expander("Picos detectados no sinal selecionado"):
@@ -1065,13 +1110,13 @@ with tab_signal:
                 "Sinal ANTES",
                 [item["name"] for item in waveforms],
                 index=0,
-                key="before_after_before_select_v023",
+                key="before_after_before_select_v025",
             )
             after_name = col_ba_2.selectbox(
                 "Sinal DEPOIS",
                 [item["name"] for item in waveforms],
                 index=min(1, len(waveforms) - 1),
-                key="before_after_after_select_v023",
+                key="before_after_after_select_v025",
             )
             before_item = next(item for item in waveforms if item["name"] == before_name)
             after_item = next(item for item in waveforms if item["name"] == after_name)
@@ -1123,7 +1168,7 @@ with tab_signal:
             normalize_ba = st.checkbox(
                 "Normalizar curvas antes/depois pelo pico absoluto",
                 value=False,
-                key="before_after_normalize_v023",
+                key="before_after_normalize_v025",
             )
             fig_ba = plot_waveforms(
                 [before_item, after_item],
@@ -1137,7 +1182,7 @@ with tab_signal:
             st.plotly_chart(
                 fig_ba,
                 use_container_width=True,
-                key="before_after_overlay_chart_v023",
+                key="before_after_overlay_chart_v025",
             )
 
             st.subheader("Tabela de variações do ringing")
@@ -1154,7 +1199,7 @@ with tab_signal:
                 data=compare_df.to_csv(index=False).encode("utf-8"),
                 file_name="comparacao_antes_depois_ringdown.csv",
                 mime="text/csv",
-                key="download_before_after_csv_v023",
+                key="download_before_after_csv_v025",
             )
 
     elif analysis_mode == "V × I / potência":
@@ -1168,13 +1213,13 @@ with tab_signal:
                 "Canal de tensão",
                 [item["name"] for item in waveforms],
                 index=0,
-                key="vi_voltage_select_v023",
+                key="vi_voltage_select_v025",
             )
             current_name = col2.selectbox(
                 "Canal de corrente",
                 [item["name"] for item in waveforms],
                 index=min(1, len(waveforms) - 1),
-                key="vi_current_select_v023",
+                key="vi_current_select_v025",
             )
             current_scale = col3.number_input(
                 "Fator do canal de corrente (A por unidade lida)",
@@ -1183,7 +1228,7 @@ with tab_signal:
                 step=0.1,
                 format="%.6g",
                 help="Use 1 se o arquivo já estiver em ampères. Se estiver em volts de shunt/probe, informe A/V.",
-                key="vi_current_scale_v023",
+                key="vi_current_scale_v025",
             )
 
             voltage_item = next(item for item in waveforms if item["name"] == voltage_name)
@@ -1232,7 +1277,7 @@ with tab_signal:
             )
             fig_p.update_xaxes(showgrid=True)
             fig_p.update_yaxes(showgrid=True)
-            st.plotly_chart(fig_p, use_container_width=True, key="vi_power_chart_v023")
+            st.plotly_chart(fig_p, use_container_width=True, key="vi_power_chart_v025")
 
             st.subheader("Métricas V-I-P")
             st.dataframe(
@@ -1245,7 +1290,7 @@ with tab_signal:
                 data=vip_csv_bytes(t, v, i, p),
                 file_name="analise_v_i_p.csv",
                 mime="text/csv",
-                key="download_vip_csv_v023",
+                key="download_vip_csv_v025",
             )
 
 with tab_export:
@@ -1257,7 +1302,7 @@ with tab_export:
         data=metrics_df.to_csv(index=False).encode("utf-8"),
         file_name="metricas_isf.csv",
         mime="text/csv",
-        key="download_general_metrics_v023",
+        key="download_general_metrics_v025",
     )
 
     st.download_button(
@@ -1265,13 +1310,13 @@ with tab_export:
         data=ring_metrics_df.to_csv(index=False).encode("utf-8"),
         file_name="metricas_ringdown_resonancia.csv",
         mime="text/csv",
-        key="download_ring_metrics_v023",
+        key="download_ring_metrics_v025",
     )
 
     export_name = st.selectbox(
         "Exportar forma de onda",
         [item["name"] for item in waveforms],
-        key="export_waveform_select_v023",
+        key="export_waveform_select_v025",
     )
     export_item = next(item for item in waveforms if item["name"] == export_name)
 
@@ -1280,7 +1325,7 @@ with tab_export:
         data=waveform_csv_bytes(export_item),
         file_name=Path(export_name).with_suffix(".csv").name,
         mime="text/csv",
-        key="download_waveform_csv_v023",
+        key="download_waveform_csv_v025",
     )
 
 with tab_header:
@@ -1290,7 +1335,7 @@ with tab_header:
     selected_header_name = st.selectbox(
         "Selecione o arquivo",
         [item["name"] for item in waveforms],
-        key="header_select_v023",
+        key="header_select_v025",
     )
     header_item = next(item for item in waveforms if item["name"] == selected_header_name)
 
@@ -1302,5 +1347,5 @@ with tab_header:
         "Cabeçalho",
         header_item["header"],
         height=350,
-        key="raw_header_text_v023",
+        key="raw_header_text_v025",
     )

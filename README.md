@@ -1,8 +1,8 @@
-# ISF Analyzer v0.2.4
+# ISF Analyzer v0.2.5
 
 Analisador local para formas de onda Tektronix `.ISF`, com foco em pulso, ringing, ressonância e eletroporação.
 
-## Novidades da v0.2.4
+## Novidades da v0.2.5
 
 - Nome da aplicação alterado para **ISF Analyzer**.
 - Seleção de picos por **clique direto no mouse**.
@@ -74,3 +74,11 @@ A seleção por clique usa o componente `streamlit-plotly-events`. Se a seleçã
 ```bash
 pip install -r requirements.txt
 ```
+
+
+## v0.2.5
+
+- Corrige visualização vazia na seleção de picos por clique.
+- Troca o gráfico interativo de ringdown para `Scatter` SVG na área clicável.
+- Força ranges X/Y coerentes com a janela de ringing e com os picos detectados.
+- Mantém seleção/desseleção por clique nos marcadores dos picos.

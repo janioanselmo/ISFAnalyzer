@@ -1,5 +1,14 @@
 # Changelog
 
+## v0.2.5 - Click plot fix
+
+- Fixed empty/default-axis rendering in click-based envelope selection.
+- Replaced WebGL trace with regular Plotly Scatter in the ringdown clickable chart.
+- Forced meaningful X/Y axis ranges based on the ringdown window and detected peaks.
+- Converted peak customdata to NumPy arrays for more reliable Plotly event payloads.
+
+# Changelog
+
 ## v0.2.4 - Plotly selected marker compatibility fix
 
 - Removed unsupported `selected.marker.symbol` property from Plotly scatter traces.
