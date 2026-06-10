@@ -37,7 +37,7 @@ st.set_page_config(
 )
 
 
-APP_VERSION = "0.2.6-usability"
+APP_VERSION = "0.2.7-mouse-peak-selection"
 
 
 def _format_metric(value: float, unit: str = "", precision: int = 4) -> str:
@@ -605,7 +605,7 @@ def plot_ringdown_with_envelope(
         yaxis_title="Amplitude corrigida",
         hovermode="closest",
         clickmode="event+select",
-        dragmode="zoom",
+        dragmode="select",
         margin=dict(l=40, r=20, t=40, b=40),
     )
     fig.update_xaxes(showgrid=True, range=x_range)
@@ -655,11 +655,11 @@ def _state_suffix(name: str) -> str:
 
 
 def _peak_selection_key(file_name: str) -> str:
-    return f"envelope_selected_peak_ids_{_state_suffix(file_name)}_v026"
+    return f"envelope_selected_peak_ids_{_state_suffix(file_name)}_v027"
 
 
 def _last_click_key(file_name: str) -> str:
-    return f"envelope_last_click_signature_{_state_suffix(file_name)}_v026"
+    return f"envelope_last_click_signature_{_state_suffix(file_name)}_v027"
 
 
 def selected_peak_ids_for_file(file_name: str) -> list[int]:
@@ -759,9 +759,9 @@ def plot_peak_selection_graph(
                 name="clique nos picos",
                 customdata=peak_df[["peak_id"]].to_numpy(),
                 selectedpoints=selected_point_indices if selected_point_indices else None,
-                marker=dict(size=14, symbol="circle-open"),
-                selected=dict(marker=dict(size=20, opacity=1.0)),
-                unselected=dict(marker=dict(opacity=0.80)),
+                marker=dict(size=18, symbol="circle-open", line=dict(width=2)),
+                selected=dict(marker=dict(size=24, opacity=1.0)),
+                unselected=dict(marker=dict(opacity=0.55)),
             )
         )
 
@@ -787,7 +787,7 @@ def plot_peak_selection_graph(
         yaxis_title="Amplitude corrigida",
         hovermode="closest",
         clickmode="event+select",
-        dragmode="zoom",
+        dragmode="select",
         margin=dict(l=40, r=20, t=35, b=40),
         legend_title="",
     )
@@ -1029,7 +1029,7 @@ with tab_signal:
         "Operação",
         ["Sinais", "Envelope", "Comparação", "Potência"],
         horizontal=True,
-        key="signal_analysis_mode_v026",
+        key="signal_analysis_mode_v027",
         help=(
             "Sinais: visualizar curvas e métricas gerais. Envelope: selecionar picos por clique e ajustar decaimento. "
             "Comparação: antes/depois. Potência: análise V × I."
@@ -1114,197 +1114,98 @@ with tab_signal:
     elif analysis_mode == "Envelope":
         st.subheader("Envelope")
         st.caption(
-            "Fluxo: ajuste a janela → clique nos picos do gráfico superior → confira a exponencial no gráfico inferior. "
-            "Nada é ajustado automaticamente até você selecionar pelo menos 2 picos ou usar o botão de autopreenchimento."
+            "Selecione os picos diretamente com o mouse. O número N é definido pela sua seleção: "
+            "2, 3, 4 ou mais picos. Para cada arquivo escolhido, aparece um gráfico de seleção "
+            "e, logo abaixo, a envoltória exponencial calculada."
         )
 
-        st.markdown("**1) Janela e detecção de picos**")
-        control_cols = st.columns([1.5, 1, 1, 1, 1])
-        ring_name = control_cols[0].selectbox(
-            "Arquivo",
-            [item["name"] for item in waveforms],
-            key="envelope_file_v026",
+        st.markdown("**1) Arquivos e janela de análise**")
+        file_names = [item["name"] for item in waveforms]
+        default_files = file_names[: min(2, len(file_names))]
+        env_selected_names = st.multiselect(
+            "Arquivos para análise de envelope",
+            file_names,
+            default=default_files,
+            key="envelope_files_v027",
+            help="Se escolher um arquivo, aparece um conjunto de gráficos. Se escolher dois, aparecem dois conjuntos para comparação.",
         )
-        env_start_us = control_cols[1].number_input(
+
+        control_cols = st.columns([1, 1, 1, 1, 1])
+        env_start_us = control_cols[0].number_input(
             "Início (µs)",
             value=ring_start_us,
             step=1.0,
             format="%.3f",
-            key="envelope_start_us_v026",
+            key="envelope_start_us_v027",
         )
-        env_end_us = control_cols[2].number_input(
+        env_end_us = control_cols[1].number_input(
             "Fim (µs)",
             value=ring_end_us,
             step=1.0,
             format="%.3f",
-            key="envelope_end_us_v026",
+            key="envelope_end_us_v027",
         )
-        env_threshold = control_cols[3].slider(
-            "Limiar (%)",
+        env_threshold = control_cols[2].slider(
+            "Limiar dos picos (%)",
             min_value=1,
             max_value=50,
             value=int(round(peak_threshold_fraction * 100)),
             step=1,
-            key="envelope_threshold_v026",
+            key="envelope_threshold_v027",
         ) / 100.0
-        env_min_distance = control_cols[4].number_input(
-            "Dist. mín. (µs)",
+        env_min_distance = control_cols[3].number_input(
+            "Distância mínima (µs)",
             min_value=0.001,
             value=min_peak_distance_us,
             step=0.5,
             format="%.3f",
-            key="envelope_min_distance_v026",
+            key="envelope_min_distance_v027",
         )
-
-        control_cols_2 = st.columns([1, 1, 1, 1])
-        polarity = control_cols_2[0].selectbox(
+        polarity = control_cols[4].selectbox(
             "Tipo de pico",
             ["Extremos positivos e negativos", "Somente positivos", "Somente negativos"],
-            key="envelope_polarity_v026",
+            key="envelope_polarity_v027",
         )
-        n_fit_peaks = control_cols_2[1].number_input(
-            "N para autopreencher",
-            min_value=2,
-            max_value=12,
-            value=3,
-            step=1,
-            key="envelope_n_peaks_v026",
-        )
-        focus_y = control_cols_2[2].checkbox(
-            "Ampliar eixo Y nos picos",
+
+        option_cols = st.columns([1, 1, 3])
+        focus_y = option_cols[0].checkbox(
+            "Zoom nos picos",
             value=True,
-            key="envelope_focus_y_v026",
-            help="Útil quando o pulso principal é muito maior que os picos finais do ringing.",
+            key="envelope_focus_y_v027",
+            help="Ignora o pulso principal na escala vertical quando ele é muito maior que o ringing.",
         )
-        log_y_fit = control_cols_2[3].checkbox(
-            "Gráfico inferior em log",
+        log_y_fit = option_cols[1].checkbox(
+            "Envelope em log",
             value=False,
-            key="envelope_log_y_v026",
+            key="envelope_log_y_v027",
+        )
+        option_cols[2].info(
+            "Dica: no gráfico de seleção, use o mouse nos marcadores dos picos. "
+            "Também é possível usar caixa/lasso para selecionar vários picos de uma vez."
         )
 
-        ring_item = next(item for item in waveforms if item["name"] == ring_name)
-        peak_df = add_peak_ids(
-            ringdown_peak_table(
-                ring_item["time_s"],
-                ring_item["value"],
-                start_us=env_start_us,
-                end_us=env_end_us,
-                baseline_mode=baseline_mode,
-                peak_threshold_fraction=env_threshold,
-                min_peak_distance_us=env_min_distance,
-            )
-        )
-        peak_df = filter_peak_table_by_polarity(peak_df, polarity).reset_index(drop=True)
-        if not peak_df.empty:
-            peak_df["peak_id"] = np.arange(len(peak_df), dtype=int)
-
-        selected_ids = selected_peak_ids_for_file(ring_name)
-        valid_peak_ids = set(int(x) for x in peak_df["peak_id"].to_list()) if not peak_df.empty else set()
-        selected_ids = [int(x) for x in selected_ids if int(x) in valid_peak_ids]
-        set_selected_peak_ids_for_file(ring_name, selected_ids)
-
-        action_cols = st.columns([1, 1, 2])
-        if action_cols[0].button("Usar últimos N", key="envelope_use_last_n_v026"):
-            set_selected_peak_ids_for_file(
-                ring_name,
-                fallback_peak_ids(peak_df, int(n_fit_peaks), polarity),
-            )
-            st.rerun()
-        if action_cols[1].button("Limpar picos", key="envelope_clear_v026"):
-            set_selected_peak_ids_for_file(ring_name, [])
-            st.session_state[_last_click_key(ring_name)] = ""
-            st.rerun()
-        action_cols[2].info(
-            f"{len(peak_df)} picos detectados na janela. {len(selected_ids)} pico(s) selecionado(s)."
-        )
-
-        st.markdown("**2) Clique nos picos desejados**")
-        fig_click = plot_peak_selection_graph(
-            ring_item,
-            peak_df,
-            selected_ids,
-            start_us=env_start_us,
-            end_us=env_end_us,
-            baseline_mode=baseline_mode,
-            max_points=max_plot_points,
-            focus_y_on_peaks=focus_y,
-        )
-        if plotly_events is not None:
-            clicked_points = plotly_events(
-                fig_click,
-                click_event=True,
-                hover_event=False,
-                select_event=False,
-                override_height=520,
-                override_width="100%",
-                key=f"envelope_click_chart_{_state_suffix(ring_name)}_v026",
-            )
-            changed = toggle_peak_selection_from_clicks(
-                clicked_points,
-                peak_df,
-                selected_state_key=_peak_selection_key(ring_name),
-                last_click_state_key=_last_click_key(ring_name),
-            )
-            if changed:
-                st.rerun()
+        if not env_selected_names:
+            st.warning("Selecione pelo menos um arquivo para analisar o envelope.")
         else:
-            st.warning(
-                "Seleção por clique indisponível. Instale: pip install streamlit-plotly-events"
-            )
-            st.plotly_chart(fig_click, use_container_width=True, key="envelope_static_chart_v026")
+            st.markdown("**2) Seleção dos picos e ajuste exponencial**")
 
-        selected_ids = selected_peak_ids_for_file(ring_name)
-        envelope_metrics, fit_df = fit_selected_envelope_only(
-            peak_df,
-            selected_ids,
-            polarity=polarity,
-            file_name=ring_name,
-        )
+        envelope_rows = []
+        envelope_fit_tables: dict[str, pd.DataFrame] = {}
 
-        st.markdown("**3) Envoltória exponencial calculada a partir dos picos selecionados**")
-        result_cols = st.columns([2, 1])
-        with result_cols[0]:
-            fig_fit = plot_selected_envelope_fit(fit_df, envelope_metrics, log_y=log_y_fit)
-            st.plotly_chart(fig_fit, use_container_width=True, key="envelope_fit_chart_v026")
-        with result_cols[1]:
-            if len(selected_ids) < 2:
-                st.warning("Selecione pelo menos 2 picos no gráfico superior para calcular τ.")
-            else:
-                st.success(f"Ajuste usando {len(fit_df)} pico(s).")
-            if not fit_df.empty:
-                st.dataframe(
-                    fit_df[["tempo_us", "tipo", "amplitude", "abs_amplitude"]],
-                    use_container_width=True,
-                    height=260,
-                )
-            else:
-                st.dataframe(pd.DataFrame(), use_container_width=True, height=260)
+        selected_items = [item for item in waveforms if item["name"] in env_selected_names]
+        if len(selected_items) == 2:
+            containers = st.columns(2)
+        else:
+            containers = [st.container() for _ in selected_items]
 
-        cols = st.columns(6)
-        cols[0].metric("τ", _format_metric(envelope_metrics["tau_us"], "µs"))
-        cols[1].metric("R²", _format_metric(envelope_metrics["r2_envelope"], ""))
-        cols[2].metric("Período", _format_metric(envelope_metrics["periodo_mediano_us"], "µs"))
-        cols[3].metric("Freq.", _format_metric(envelope_metrics["freq_envelope_khz"], "kHz"))
-        cols[4].metric("Decaimento/ciclo", _format_metric(envelope_metrics["decaimento_por_periodo_percent"], "%"))
-        cols[5].metric("Meia-vida", _format_metric(envelope_metrics["meia_vida_us"], "µs"))
-
-        st.markdown("---")
-        st.subheader("Comparação de envelopes salvos")
-        st.caption(
-            "A comparação usa as seleções manuais salvas por arquivo. Para incluir outro arquivo, selecione-o acima e clique em seus picos."
-        )
-        cmp_cols = st.columns([1, 1, 2])
-        normalize_env = cmp_cols[0].checkbox(
-            "Normalizar envelopes",
-            value=True,
-            key="envelope_compare_norm_v026",
-        )
-        if cmp_cols[1].button("Autopreencher todos", key="envelope_autofill_all_v026"):
-            for item in waveforms:
-                peaks_i = add_peak_ids(
+        for idx, ring_item in enumerate(selected_items):
+            container = containers[idx] if len(selected_items) == 2 else containers[idx]
+            with container:
+                st.markdown(f"### {ring_item['name']}")
+                peak_df = add_peak_ids(
                     ringdown_peak_table(
-                        item["time_s"],
-                        item["value"],
+                        ring_item["time_s"],
+                        ring_item["value"],
                         start_us=env_start_us,
                         end_us=env_end_us,
                         baseline_mode=baseline_mode,
@@ -1312,62 +1213,99 @@ with tab_signal:
                         min_peak_distance_us=env_min_distance,
                     )
                 )
-                peaks_i = filter_peak_table_by_polarity(peaks_i, polarity).reset_index(drop=True)
-                if not peaks_i.empty:
-                    peaks_i["peak_id"] = np.arange(len(peaks_i), dtype=int)
-                set_selected_peak_ids_for_file(
-                    item["name"],
-                    fallback_peak_ids(peaks_i, int(n_fit_peaks), polarity),
-                )
-            st.rerun()
-        cmp_cols[2].info("Use o autopreenchimento só para triagem rápida; para publicação, prefira seleção manual consistente.")
+                peak_df = filter_peak_table_by_polarity(peak_df, polarity).reset_index(drop=True)
+                if not peak_df.empty:
+                    peak_df["peak_id"] = np.arange(len(peak_df), dtype=int)
 
-        envelope_rows = []
-        for item in waveforms:
-            peaks_i = add_peak_ids(
-                ringdown_peak_table(
-                    item["time_s"],
-                    item["value"],
+                fig_click = plot_peak_selection_graph(
+                    ring_item,
+                    peak_df,
+                    selected_peak_ids=[],
                     start_us=env_start_us,
                     end_us=env_end_us,
                     baseline_mode=baseline_mode,
-                    peak_threshold_fraction=env_threshold,
-                    min_peak_distance_us=env_min_distance,
+                    max_points=max_plot_points,
+                    focus_y_on_peaks=focus_y,
                 )
-            )
-            peaks_i = filter_peak_table_by_polarity(peaks_i, polarity).reset_index(drop=True)
-            if not peaks_i.empty:
-                peaks_i["peak_id"] = np.arange(len(peaks_i), dtype=int)
-            ids_i = selected_peak_ids_for_file(item["name"])
-            ids_i = [int(x) for x in ids_i if int(x) in set(peaks_i["peak_id"].to_list())]
-            if len(ids_i) < 2:
-                continue
-            row, _fit_i = fit_selected_envelope_only(
-                peaks_i,
-                ids_i,
-                polarity=polarity,
-                file_name=item["name"],
-            )
-            if np.isfinite(row.get("tau_us", np.nan)):
-                envelope_rows.append(row)
+                selection_state = st.plotly_chart(
+                    fig_click,
+                    use_container_width=True,
+                    key=f"envelope_native_select_{_state_suffix(ring_item['name'])}_v027",
+                    on_select="rerun",
+                    selection_mode=("points", "box", "lasso"),
+                )
+                selected_ids = extract_selected_peak_ids(selection_state)
 
-        envelope_df = pd.DataFrame(envelope_rows)
-        if envelope_df.empty:
-            st.info("Nenhum arquivo com pelo menos 2 picos selecionados para comparar.")
+                st.caption(
+                    f"{len(peak_df)} picos detectados | {len(selected_ids)} selecionado(s) pelo mouse."
+                )
+
+                envelope_metrics, fit_df = fit_selected_envelope_only(
+                    peak_df,
+                    selected_ids,
+                    polarity=polarity,
+                    file_name=ring_item["name"],
+                )
+                envelope_fit_tables[ring_item["name"]] = fit_df
+                if np.isfinite(envelope_metrics.get("tau_us", np.nan)):
+                    envelope_rows.append(envelope_metrics)
+
+                fig_fit = plot_selected_envelope_fit(fit_df, envelope_metrics, log_y=log_y_fit)
+                st.plotly_chart(
+                    fig_fit,
+                    use_container_width=True,
+                    key=f"envelope_fit_{_state_suffix(ring_item['name'])}_v027",
+                )
+
+                metric_cols = st.columns(4)
+                metric_cols[0].metric("τ", _format_metric(envelope_metrics["tau_us"], "µs"))
+                metric_cols[1].metric("R²", _format_metric(envelope_metrics["r2_envelope"], ""))
+                metric_cols[2].metric("Período", _format_metric(envelope_metrics["periodo_mediano_us"], "µs"))
+                metric_cols[3].metric("Freq.", _format_metric(envelope_metrics["freq_envelope_khz"], "kHz"))
+
+                if len(selected_ids) < 2:
+                    st.warning("Selecione pelo menos 2 picos no gráfico acima para calcular a envoltória.")
+                else:
+                    st.success(f"Envoltória ajustada com {len(fit_df)} pico(s).")
+
+                with st.expander("Picos usados e picos detectados", expanded=False):
+                    st.markdown("**Picos usados no ajuste**")
+                    if fit_df.empty:
+                        st.dataframe(pd.DataFrame(), use_container_width=True, height=160)
+                    else:
+                        st.dataframe(
+                            fit_df[["tempo_us", "tipo", "amplitude", "abs_amplitude"]],
+                            use_container_width=True,
+                            height=180,
+                        )
+                    st.markdown("**Todos os picos detectados na janela**")
+                    st.dataframe(peak_df, use_container_width=True, height=220)
+
+        st.markdown("---")
+        st.subheader("Comparação das envoltórias selecionadas")
+        if len(envelope_rows) < 2:
+            st.info("Selecione pelo menos 2 picos em dois ou mais arquivos para sobrepor as envoltórias.")
         else:
+            compare_cols = st.columns([1, 3])
+            normalize_env = compare_cols[0].checkbox(
+                "Normalizar",
+                value=True,
+                key="envelope_compare_norm_v027",
+            )
+            compare_cols[1].caption(
+                "A sobreposição compara o decaimento relativo das curvas selecionadas manualmente."
+            )
+            envelope_df = pd.DataFrame(envelope_rows)
             fig_cmp = plot_envelope_comparison(envelope_df, normalize=normalize_env)
-            st.plotly_chart(fig_cmp, use_container_width=True, key="envelope_compare_chart_v026")
+            st.plotly_chart(fig_cmp, use_container_width=True, key="envelope_compare_chart_v027")
             st.dataframe(compact_metrics_table(envelope_rows), use_container_width=True)
             st.download_button(
                 "Baixar comparação de envelopes em CSV",
                 data=envelope_df.to_csv(index=False).encode("utf-8"),
                 file_name="comparacao_envelopes_exponenciais.csv",
                 mime="text/csv",
-                key="download_envelope_compare_v026",
+                key="download_envelope_compare_v027",
             )
-
-        with st.expander("Picos detectados na janela atual", expanded=False):
-            st.dataframe(peak_df, use_container_width=True)
 
     elif analysis_mode == "Comparação":
         st.subheader("Comparação")

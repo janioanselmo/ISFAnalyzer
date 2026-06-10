@@ -1,67 +1,28 @@
-# ISF Analyzer v0.2.6
+# ISF Analyzer
 
-Analisador local para formas de onda Tektronix `.ISF`, com foco em pulso, ringing, ressonância e eletroporação.
+Local Streamlit app for Tektronix `.ISF` waveform analysis, focused on pulse analysis, ringdown, resonance and electroporation experiments.
 
-## Novidades da v0.2.6
+## Run
 
-- Interface da aba **Análise de sinais** simplificada para quatro operações curtas e exclusivas:
-  - **Sinais**: visualização e métricas gerais.
-  - **Envelope**: seleção manual de picos por clique e ajuste exponencial.
-  - **Comparação**: análise antes × depois.
-  - **Potência**: análise V × I / potência.
-- A operação **Envelope** agora segue um fluxo em três passos:
-  1. ajustar janela e detecção de picos;
-  2. clicar nos picos desejados;
-  3. visualizar a envoltória exponencial calculada.
-- O ajuste da envoltória não é mais feito automaticamente por padrão quando nenhum pico é selecionado.
-- Adicionado botão **Usar últimos N** para triagem rápida.
-- Seleções manuais são mantidas por arquivo, permitindo comparar envelopes de diferentes curvas carregadas.
-- Adicionado segundo gráfico dedicado somente ao ajuste exponencial dos picos selecionados.
-- Adicionada opção de ampliar o eixo Y nos picos, útil quando o pulso principal é muito maior que o ringing.
-
-## Como usar a seleção de envelope
-
-1. Carregue um ou mais arquivos `.ISF` na barra lateral.
-2. Entre em **Análise de sinais → Envelope**.
-3. Escolha o arquivo.
-4. Ajuste início/fim da janela onde estão os picos de interesse.
-5. Clique nos marcadores dos picos no gráfico superior.
-6. Use pelo menos 2 picos para gerar a envoltória exponencial no gráfico inferior.
-7. Para comparar vários arquivos, selecione os picos de cada arquivo. A comparação usa as seleções salvas por arquivo.
-
-O modelo ajustado é:
-
-```text
-|V_peak(t)| = A0 * exp(-(t - t0) / tau)
-```
-
-## Instalação
-
-### Windows
-
-```bat
-python -m venv .venv
-.venv\Scripts\activate
+```bash
 pip install -r requirements.txt
 streamlit run app.py
 ```
 
-Ou execute:
+On Windows, you can also run:
 
 ```bat
 run_windows.bat
 ```
 
-### Linux/macOS
+## v0.2.7 usability notes
 
-```bash
-bash run_linux_mac.sh
-```
+The **Envelope** operation now uses mouse-based peak selection only:
 
-## Dependência para clique em picos
+1. Choose one or more `.ISF` files.
+2. Adjust the ringdown window.
+3. Select the peaks directly in the waveform graph using the mouse.
+4. The number of peaks is defined by the selected points; there is no manual `N` field.
+5. The exponential envelope is fitted automatically when at least two peaks are selected.
 
-A seleção por clique usa `streamlit-plotly-events`:
-
-```bash
-pip install -r requirements.txt
-```
+If two files are selected, the app shows two peak-selection graphs side by side and then overlays the fitted envelopes for comparison.
