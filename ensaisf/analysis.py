@@ -167,6 +167,18 @@ def estimate_decay_tau(time_s: np.ndarray, value: np.ndarray) -> float:
     return float(-1.0 / slope)
 
 
+
+def trapezoid_integral(y: np.ndarray, x: np.ndarray) -> float:
+    """Integra por regra dos trapézios, compatível com NumPy antigo/novo.
+
+    Em algumas versões/ambientes, `np.trapz` foi removido ou não está
+    disponível. O nome atual recomendado é `np.trapezoid`.
+    """
+    if hasattr(np, "trapezoid"):
+        return float(np.trapezoid(y, x))
+    return float(np.trapz(y, x))
+
+
 def integrate_energy_resistive(
     time_s: np.ndarray,
     voltage_v: np.ndarray,
@@ -176,7 +188,7 @@ def integrate_energy_resistive(
     if resistance_ohm <= 0 or len(voltage_v) < 2:
         return float("nan")
     power_w = (voltage_v ** 2) / resistance_ohm
-    return float(np.trapz(power_w, time_s))
+    return trapezoid_integral(power_w, time_s)
 
 
 def electric_field_metrics(
@@ -280,8 +292,8 @@ def vi_metrics(
 ) -> dict:
     """Métricas de potência/energia para par tensão-corrente."""
     power_w = voltage_v * current_a
-    energy_j = float(np.trapz(power_w, time_s))
-    apparent_energy_abs_j = float(np.trapz(np.abs(power_w), time_s))
+    energy_j = trapezoid_integral(power_w, time_s)
+    apparent_energy_abs_j = trapezoid_integral(np.abs(power_w), time_s)
 
     return {
         "v_max": float(np.max(voltage_v)),

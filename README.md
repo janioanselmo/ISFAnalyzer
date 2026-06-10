@@ -53,3 +53,13 @@ streamlit run app.py
 - Energia por carga resistiva usa `E = ∫ v²/R dt`.
 - Para análise V × I, use `P(t)=V(t)I(t)` e `E=∫P(t)dt`.
 - Se o canal de corrente estiver em volts por causa de shunt ou probe, configure o fator A/V.
+
+
+## Correção v0.1.1
+
+Esta versão remove o uso direto de `np.trapz` e usa uma função de compatibilidade
+com `np.trapezoid`, evitando o erro:
+
+```text
+AttributeError: module 'numpy' has no attribute 'trapz'
+```
