@@ -218,7 +218,11 @@ with tab_single:
 
     corrected = st.checkbox("Subtrair linha de base no gráfico", value=False)
     fig = plot_waveforms([selected], corrected=corrected, max_points=max_plot_points)
-    st.plotly_chart(fig, use_container_width=True)
+    st.plotly_chart(
+        fig,
+        use_container_width=True,
+        key="single_waveform_chart",
+    )
 
     st.subheader("Métricas completas")
     st.dataframe(
@@ -238,7 +242,11 @@ with tab_multi:
         corrected=corrected_multi,
         max_points=max_plot_points,
     )
-    st.plotly_chart(fig, use_container_width=True)
+    st.plotly_chart(
+        fig,
+        use_container_width=True,
+        key="multi_waveform_comparison_chart",
+    )
 
     st.subheader("Tabela comparativa")
     st.dataframe(metrics_df, use_container_width=True)
@@ -294,7 +302,11 @@ with tab_vi:
         )
         fig_p.update_xaxes(showgrid=True)
         fig_p.update_yaxes(showgrid=True)
-        st.plotly_chart(fig_p, use_container_width=True)
+        st.plotly_chart(
+            fig_p,
+            use_container_width=True,
+            key="vi_power_chart",
+        )
 
         vi_df = pd.DataFrame({"tempo_s": t, "tempo_us": t * 1e6, "tensao_v": v, "corrente_a": i, "potencia_w": p})
         st.download_button(

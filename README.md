@@ -63,3 +63,8 @@ com `np.trapezoid`, evitando o erro:
 ```text
 AttributeError: module 'numpy' has no attribute 'trapz'
 ```
+
+
+## v0.1.2
+
+- Corrige `StreamlitDuplicateElementId` adicionando `key` único aos gráficos `st.plotly_chart`.
