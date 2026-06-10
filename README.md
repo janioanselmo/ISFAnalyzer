@@ -15,7 +15,7 @@ On Windows, you can also run:
 run_windows.bat
 ```
 
-## v0.3.0 usability notes
+## v0.3.1 usability notes
 
 The **Envelope** operation now uses mouse-based peak selection only:
 
@@ -28,7 +28,7 @@ The **Envelope** operation now uses mouse-based peak selection only:
 If two files are selected, the app shows two peak-selection graphs side by side and then overlays the fitted envelopes for comparison.
 
 
-## v0.3.0
+## v0.3.1
 
 - Click-toggle peak selection for envelope fitting.
 - One graph per selected ISF file in Envelope mode.

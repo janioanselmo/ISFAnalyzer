@@ -1,9 +1,13 @@
 # Changelog
 
-## v0.3.0 - Visible click peaks
+## v0.3.1 - Image click selection
 
-- Fixes blank/empty click-selection plots in the Envelope workflow.
-- Separates the visual waveform context from the click target graph.
-- Adds a reliable marker-only peak selector for mouse clicks.
-- Removes `override_width="100%"` from `streamlit-plotly-events` calls for better compatibility.
-- Keeps one or two files side-by-side for before/after envelope comparison.
+- Replaced the unstable Plotly click callback in the Envelope workflow with image-coordinate based selection.
+- The visible waveform is now the clickable selector.
+- Clicking near a peak marker toggles selection and reruns the envelope fit.
+- Updated Streamlit chart/dataframe calls from `use_container_width=True` to `width="stretch"`.
+- Added `streamlit-image-coordinates` and `Pillow` dependencies.
+
+## v0.3.0 - Clickable envelope
+
+- Made waveform plot directly clickable for envelope fitting.

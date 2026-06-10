@@ -1,6 +1,6 @@
-streamlit>=1.36
+streamlit>=1.50
 numpy>=1.24
 pandas>=2.0
 plotly>=5.20
-
-streamlit-plotly-events>=0.0.6
+Pillow>=10.0
+streamlit-image-coordinates>=0.1.6

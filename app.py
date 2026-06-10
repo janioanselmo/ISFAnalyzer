@@ -2,16 +2,22 @@ from __future__ import annotations
 
 from pathlib import Path
 import hashlib
+from io import BytesIO
 
 import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
+from PIL import Image, ImageDraw, ImageFont
 
 try:
-    from streamlit_plotly_events import plotly_events
-except ImportError:  # optional component; app still runs with native Streamlit selection
-    plotly_events = None
+    from streamlit_image_coordinates import streamlit_image_coordinates
+except ImportError:  # optional component; app still runs, but image-click selection is disabled
+    streamlit_image_coordinates = None
+
+# Kept only for backward compatibility with old local environments.
+# The Envelope workflow no longer depends on streamlit-plotly-events.
+plotly_events = None
 
 from ensaisf.analysis import (
     align_current_to_voltage,
@@ -37,7 +43,7 @@ st.set_page_config(
 )
 
 
-APP_VERSION = "0.3.0-clickable-envelope"
+APP_VERSION = "0.3.1-image-click-selection"
 
 
 def _format_metric(value: float, unit: str = "", precision: int = 4) -> str:
@@ -666,11 +672,11 @@ def _state_suffix(name: str) -> str:
 
 
 def _peak_selection_key(file_name: str) -> str:
-    return f"envelope_selected_peak_ids_{_state_suffix(file_name)}_v030"
+    return f"envelope_selected_peak_ids_{_state_suffix(file_name)}_v031"
 
 
 def _last_click_key(file_name: str) -> str:
-    return f"envelope_last_click_signature_{_state_suffix(file_name)}_v030"
+    return f"envelope_last_click_signature_{_state_suffix(file_name)}_v031"
 
 
 def selected_peak_ids_for_file(file_name: str) -> list[int]:
@@ -916,6 +922,194 @@ def plot_peak_selection_graph(
     fig.update_yaxes(showgrid=True, range=y_range)
     return fig
 
+
+
+def _to_pixel_x(x_value: float, x_range: tuple[float, float], plot_box: tuple[int, int, int, int]) -> float:
+    left, _top, right, _bottom = plot_box
+    x_min, x_max = x_range
+    if np.isclose(x_max, x_min):
+        return float(left)
+    return left + (float(x_value) - x_min) * (right - left) / (x_max - x_min)
+
+
+def _to_pixel_y(y_value: float, y_range: tuple[float, float], plot_box: tuple[int, int, int, int]) -> float:
+    _left, top, _right, bottom = plot_box
+    y_min, y_max = y_range
+    if np.isclose(y_max, y_min):
+        return float(bottom)
+    return bottom - (float(y_value) - y_min) * (bottom - top) / (y_max - y_min)
+
+
+def _draw_text(draw: ImageDraw.ImageDraw, position: tuple[int, int], text: str, fill=(70, 76, 86)) -> None:
+    try:
+        font = ImageFont.load_default()
+    except Exception:
+        font = None
+    draw.text(position, text, fill=fill, font=font)
+
+
+def build_clickable_waveform_image(
+    item: dict,
+    peak_df: pd.DataFrame,
+    selected_peak_ids: list[int],
+    start_us: float,
+    end_us: float,
+    baseline_mode: str,
+    max_points: int,
+    focus_y_on_peaks: bool = True,
+    image_width: int = 1400,
+    image_height: int = 500,
+) -> tuple[Image.Image, dict[int, tuple[float, float]]]:
+    """Render a waveform as a PNG-like image and return peak pixel locations.
+
+    Streamlit/Plotly click callbacks were unstable on some local installations.
+    This image-based selector is intentionally simple: the user clicks the
+    plotted marker, the app maps the pixel click to the nearest peak, and the
+    selected peak IDs drive the envelope fit.
+    """
+    t = item["time_s"]
+    y, _baseline = subtract_baseline(t, item["value"], mode=baseline_mode)
+    t_win, y_win, _indices = slice_window_us(t, y, start_us, end_us)
+    x_range_list, y_range_list = _axis_ranges_for_envelope_view(
+        t_win,
+        y_win,
+        peak_df,
+        start_us,
+        end_us,
+        focus_y_on_peaks=focus_y_on_peaks,
+    )
+    x_range = (float(x_range_list[0]), float(x_range_list[1]))
+    y_range = (float(y_range_list[0]), float(y_range_list[1]))
+
+    img = Image.new("RGB", (image_width, image_height), "white")
+    draw = ImageDraw.Draw(img)
+    left, top, right, bottom = 88, 32, image_width - 36, image_height - 66
+    plot_box = (left, top, right, bottom)
+
+    grid_color = (225, 230, 236)
+    axis_color = (80, 88, 98)
+    signal_color = (0, 109, 204)
+    peak_color = (35, 145, 255)
+    selected_color = (235, 68, 68)
+
+    # Plot area and grid.
+    draw.rectangle([left, top, right, bottom], outline=(238, 241, 245), width=1)
+    for idx in range(6):
+        gx = left + idx * (right - left) / 5
+        draw.line([(gx, top), (gx, bottom)], fill=grid_color, width=1)
+        x_val = x_range[0] + idx * (x_range[1] - x_range[0]) / 5
+        _draw_text(draw, (int(gx) - 18, bottom + 10), f"{x_val:.0f}")
+    for idx in range(5):
+        gy = top + idx * (bottom - top) / 4
+        draw.line([(left, gy), (right, gy)], fill=grid_color, width=1)
+        y_val = y_range[1] - idx * (y_range[1] - y_range[0]) / 4
+        _draw_text(draw, (10, int(gy) - 7), f"{y_val:.0f}")
+
+    # Zero axes, when inside range.
+    if x_range[0] <= 0 <= x_range[1]:
+        x0 = _to_pixel_x(0, x_range, plot_box)
+        draw.line([(x0, top), (x0, bottom)], fill=(110, 110, 110), width=1)
+    if y_range[0] <= 0 <= y_range[1]:
+        y0 = _to_pixel_y(0, y_range, plot_box)
+        draw.line([(left, y0), (right, y0)], fill=(110, 110, 110), width=1)
+
+    # Waveform line, decimated.
+    if len(t_win):
+        t_plot, y_plot = decimate_for_plot(t_win, y_win, max_points=max_points)
+        points = []
+        for tx, yy in zip(t_plot * 1e6, y_plot):
+            if not np.isfinite(tx) or not np.isfinite(yy):
+                continue
+            px = _to_pixel_x(float(tx), x_range, plot_box)
+            py = _to_pixel_y(float(yy), y_range, plot_box)
+            points.append((px, py))
+        if len(points) >= 2:
+            draw.line(points, fill=signal_color, width=2)
+
+    selected_set = set(int(x) for x in selected_peak_ids)
+    peak_pixels: dict[int, tuple[float, float]] = {}
+    if not peak_df.empty:
+        for _, row in peak_df.iterrows():
+            peak_id = int(row["peak_id"])
+            px = _to_pixel_x(float(row["tempo_us"]), x_range, plot_box)
+            py = _to_pixel_y(float(row["amplitude"]), y_range, plot_box)
+            peak_pixels[peak_id] = (px, py)
+            if peak_id in selected_set:
+                r = 9
+                draw.ellipse([px - r, py - r, px + r, py + r], fill=(255, 240, 240), outline=selected_color, width=4)
+                draw.line([(px - 8, py), (px + 8, py)], fill=selected_color, width=2)
+                draw.line([(px, py - 8), (px, py + 8)], fill=selected_color, width=2)
+            else:
+                r = 6
+                draw.ellipse([px - r, py - r, px + r, py + r], fill="white", outline=peak_color, width=3)
+
+    _draw_text(draw, (left, image_height - 28), "Tempo (µs)")
+    _draw_text(draw, (left, 8), "Clique nos círculos dos picos para selecionar/desmarcar")
+    _draw_text(draw, (image_width - 250, 8), "azul = detectado | vermelho = selecionado")
+    # Y label simplified horizontally for readability in the image component.
+    _draw_text(draw, (10, 8), "Amplitude corrigida")
+    return img, peak_pixels
+
+
+def nearest_peak_id_from_image_click(
+    click_data: dict | None,
+    peak_pixels: dict[int, tuple[float, float]],
+    max_distance_px: float = 28.0,
+) -> int | None:
+    """Return nearest peak id from a streamlit-image-coordinates click."""
+    if not click_data or not peak_pixels:
+        return None
+    try:
+        click_x = float(click_data.get("x"))
+        click_y = float(click_data.get("y"))
+    except (TypeError, ValueError):
+        return None
+    best_id = None
+    best_dist = float("inf")
+    for peak_id, (px, py) in peak_pixels.items():
+        dist = float(np.hypot(click_x - px, click_y - py))
+        if dist < best_dist:
+            best_dist = dist
+            best_id = int(peak_id)
+    if best_dist <= max_distance_px:
+        return best_id
+    return None
+
+
+def toggle_peak_selection_from_image_click(
+    click_data: dict | None,
+    peak_pixels: dict[int, tuple[float, float]],
+    peak_df: pd.DataFrame,
+    selected_state_key: str,
+    last_click_state_key: str,
+) -> bool:
+    """Toggle selected peak using an image coordinate click."""
+    if not click_data:
+        return False
+    signature = f"{click_data.get('x')}:{click_data.get('y')}"
+    if st.session_state.get(last_click_state_key) == signature:
+        return False
+    peak_id = nearest_peak_id_from_image_click(click_data, peak_pixels)
+    if peak_id is None:
+        st.session_state[last_click_state_key] = signature
+        return False
+    selected_ids = list(st.session_state.get(selected_state_key, []))
+    if peak_id in selected_ids:
+        selected_ids = [item for item in selected_ids if int(item) != peak_id]
+    else:
+        selected_ids.append(int(peak_id))
+    peak_order = {
+        int(row["peak_id"]): float(row["tempo_us"])
+        for _, row in peak_df.iterrows()
+    }
+    selected_ids = sorted(set(selected_ids), key=lambda item: peak_order.get(int(item), float("inf")))
+    st.session_state[selected_state_key] = selected_ids
+    st.session_state[last_click_state_key] = signature
+    return True
+
+
+def _image_click_version_key(file_name: str) -> str:
+    return f"envelope_image_click_version_{_state_suffix(file_name)}_v031"
 
 def plot_selected_envelope_fit(fit_df: pd.DataFrame, envelope: dict, log_y: bool = False):
     """Plot selected peak amplitudes and the fitted exponential envelope."""
@@ -1214,7 +1408,7 @@ with tab_signal:
                 start_us=overview_start_us,
                 end_us=overview_end_us,
             )
-            st.plotly_chart(fig, use_container_width=True, key="signals_waveform_chart_v026")
+            st.plotly_chart(fig, width="stretch", key="signals_waveform_chart_v026")
 
         selected_metric_name = st.selectbox(
             "Resumo do arquivo",
@@ -1230,7 +1424,7 @@ with tab_signal:
         cols[4].metric("Freq. FFT", _format_metric(selected_metrics["freq_fft_khz"], "kHz"))
 
         with st.expander("Tabela completa", expanded=False):
-            st.dataframe(metrics_df, use_container_width=True)
+            st.dataframe(metrics_df, width="stretch")
 
     elif analysis_mode == "Envelope":
         st.subheader("Envelope")
@@ -1345,10 +1539,12 @@ with tab_signal:
                 action_cols = st.columns([1, 1, 4])
                 if action_cols[0].button(
                     "Limpar seleção",
-                    key=f"clear_peak_selection_{_state_suffix(ring_item['name'])}_v030",
+                    key=f"clear_peak_selection_{_state_suffix(ring_item['name'])}_v031",
                 ):
                     set_selected_peak_ids_for_file(ring_item["name"], [])
                     st.session_state[last_click_state_key] = None
+                    version_key = _image_click_version_key(ring_item["name"])
+                    st.session_state[version_key] = int(st.session_state.get(version_key, 0)) + 1
                     st.rerun()
 
                 action_cols[1].caption(f"Selecionados: {len(selected_ids)}")
@@ -1356,59 +1552,84 @@ with tab_signal:
                     "Clique uma vez no marcador do pico. Cada clique alterna entre selecionado/desmarcado."
                 )
 
-                fig_context = plot_envelope_context_graph(
-                    ring_item,
-                    peak_df,
-                    selected_peak_ids=selected_ids,
-                    start_us=env_start_us,
-                    end_us=env_end_us,
-                    baseline_mode=baseline_mode,
-                    max_points=max_plot_points,
-                    focus_y_on_peaks=focus_y,
-                )
+                click_version_key = _image_click_version_key(ring_item["name"])
+                if click_version_key not in st.session_state:
+                    st.session_state[click_version_key] = 0
 
                 if peak_df.empty:
                     st.warning(
                         "Nenhum pico foi detectado nessa janela. Ajuste o início/fim, reduza o limiar "
                         "ou diminua a distância mínima entre picos."
                     )
+                    fig_context = plot_envelope_context_graph(
+                        ring_item,
+                        peak_df,
+                        selected_peak_ids=selected_ids,
+                        start_us=env_start_us,
+                        end_us=env_end_us,
+                        baseline_mode=baseline_mode,
+                        max_points=max_plot_points,
+                        focus_y_on_peaks=focus_y,
+                    )
                     st.plotly_chart(
                         fig_context,
-                        use_container_width=True,
-                        key=f"envelope_empty_context_{_state_suffix(ring_item['name'])}_v030",
+                        width="stretch",
+                        key=f"envelope_empty_context_{_state_suffix(ring_item['name'])}_v031",
                     )
-                elif plotly_events is None:
+                elif streamlit_image_coordinates is None:
                     st.error(
-                        "O componente de clique não está instalado. Rode: "
-                        "pip install streamlit-plotly-events"
+                        "O componente de clique por imagem não está instalado. Rode: "
+                        "pip install streamlit-image-coordinates"
+                    )
+                    fig_context = plot_envelope_context_graph(
+                        ring_item,
+                        peak_df,
+                        selected_peak_ids=selected_ids,
+                        start_us=env_start_us,
+                        end_us=env_end_us,
+                        baseline_mode=baseline_mode,
+                        max_points=max_plot_points,
+                        focus_y_on_peaks=focus_y,
                     )
                     st.plotly_chart(
                         fig_context,
-                        use_container_width=True,
-                        key=f"envelope_static_select_{_state_suffix(ring_item['name'])}_v030",
+                        width="stretch",
+                        key=f"envelope_static_select_{_state_suffix(ring_item['name'])}_v031",
                     )
                 else:
                     st.caption(
-                        "Este gráfico é o seletor: clique uma vez diretamente em um círculo de pico. "
-                        "Depois do clique, a contagem e a envoltória abaixo são atualizadas."
+                        "Clique uma vez diretamente em um círculo de pico. "
+                        "O gráfico é uma imagem clicável para evitar falhas do Plotly/Streamlit."
                     )
-                    clicked_points = plotly_events(
-                        fig_context,
-                        click_event=True,
-                        hover_event=False,
-                        select_event=False,
-                        override_height=470,
-                        key=f"envelope_click_main_{_state_suffix(ring_item['name'])}_v030",
+                    click_img, peak_pixels = build_clickable_waveform_image(
+                        ring_item,
+                        peak_df,
+                        selected_peak_ids=selected_ids,
+                        start_us=env_start_us,
+                        end_us=env_end_us,
+                        baseline_mode=baseline_mode,
+                        max_points=max_plot_points,
+                        focus_y_on_peaks=focus_y,
+                        image_width=1400 if len(selected_items) == 1 else 980,
+                        image_height=500,
                     )
-                    changed = toggle_peak_selection_from_clicks(
-                        clicked_points,
+                    click_data = streamlit_image_coordinates(
+                        click_img,
+                        width=min(1400, 980 if len(selected_items) == 2 else 1400),
+                        key=(
+                            f"envelope_image_click_{_state_suffix(ring_item['name'])}_"
+                            f"{st.session_state[click_version_key]}_v031"
+                        ),
+                    )
+                    changed = toggle_peak_selection_from_image_click(
+                        click_data,
+                        peak_pixels,
                         peak_df,
                         selected_state_key=selected_state_key,
                         last_click_state_key=last_click_state_key,
                     )
                     if changed:
-                        selected_ids = selected_peak_ids_for_file(ring_item["name"])
-                        st.success(f"Pico selecionado/removido. Total: {len(selected_ids)}.")
+                        st.rerun()
 
                 selected_ids = selected_peak_ids_for_file(ring_item["name"])
                 valid_ids = set(peak_df["peak_id"].to_list()) if not peak_df.empty else set()
@@ -1433,8 +1654,8 @@ with tab_signal:
                 fig_fit = plot_selected_envelope_fit(fit_df, envelope_metrics, log_y=log_y_fit)
                 st.plotly_chart(
                     fig_fit,
-                    use_container_width=True,
-                    key=f"envelope_fit_{_state_suffix(ring_item['name'])}_v030",
+                    width="stretch",
+                    key=f"envelope_fit_{_state_suffix(ring_item['name'])}_v031",
                 )
 
                 metric_cols = st.columns(4)
@@ -1451,15 +1672,15 @@ with tab_signal:
                 with st.expander("Picos usados e picos detectados", expanded=False):
                     st.markdown("**Picos usados no ajuste**")
                     if fit_df.empty:
-                        st.dataframe(pd.DataFrame(), use_container_width=True, height=160)
+                        st.dataframe(pd.DataFrame(), width="stretch", height=160)
                     else:
                         st.dataframe(
                             fit_df[["tempo_us", "tipo", "amplitude", "abs_amplitude"]],
-                            use_container_width=True,
+                            width="stretch",
                             height=180,
                         )
                     st.markdown("**Todos os picos detectados na janela**")
-                    st.dataframe(peak_df, use_container_width=True, height=220)
+                    st.dataframe(peak_df, width="stretch", height=220)
 
         st.markdown("---")
         st.subheader("Comparação das envoltórias selecionadas")
@@ -1477,14 +1698,14 @@ with tab_signal:
             )
             envelope_df = pd.DataFrame(envelope_rows)
             fig_cmp = plot_envelope_comparison(envelope_df, normalize=normalize_env)
-            st.plotly_chart(fig_cmp, use_container_width=True, key="envelope_compare_chart_v030")
-            st.dataframe(compact_metrics_table(envelope_rows), use_container_width=True)
+            st.plotly_chart(fig_cmp, width="stretch", key="envelope_compare_chart_v031")
+            st.dataframe(compact_metrics_table(envelope_rows), width="stretch")
             st.download_button(
                 "Baixar comparação de envelopes em CSV",
                 data=envelope_df.to_csv(index=False).encode("utf-8"),
                 file_name="comparacao_envelopes_exponenciais.csv",
                 mime="text/csv",
-                key="download_envelope_compare_v030",
+                key="download_envelope_compare_v031",
             )
 
     elif analysis_mode == "Comparação":
@@ -1588,8 +1809,8 @@ with tab_signal:
                 start_us=cmp_start_us,
                 end_us=cmp_end_us,
             )
-            st.plotly_chart(fig_ba, use_container_width=True, key="comparison_overlay_chart_v026")
-            st.dataframe(compare_df, use_container_width=True)
+            st.plotly_chart(fig_ba, width="stretch", key="comparison_overlay_chart_v026")
+            st.dataframe(compare_df, width="stretch")
             st.download_button(
                 "Baixar comparação em CSV",
                 data=compare_df.to_csv(index=False).encode("utf-8"),
@@ -1669,8 +1890,8 @@ with tab_signal:
             )
             fig_p.update_xaxes(showgrid=True)
             fig_p.update_yaxes(showgrid=True)
-            st.plotly_chart(fig_p, use_container_width=True, key="power_chart_v026")
-            st.dataframe(pd.DataFrame([vi]).T.rename(columns={0: "valor"}), use_container_width=True)
+            st.plotly_chart(fig_p, width="stretch", key="power_chart_v026")
+            st.dataframe(pd.DataFrame([vi]).T.rename(columns={0: "valor"}), width="stretch")
             st.download_button(
                 "Baixar V-I-P em CSV",
                 data=vip_csv_bytes(t, v, i, p),
