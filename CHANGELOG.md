@@ -1,6 +1,11 @@
 # Changelog
 
-## v0.2.3 - Click peak selection
+## v0.2.4 - Plotly selected marker compatibility fix
+
+- Removed unsupported `selected.marker.symbol` property from Plotly scatter traces.
+- Keeps click-based peak selection and selected-point highlighting using supported marker size behavior.
+
+## v0.2.4 - Click peak selection
 
 Suggested commit:
 

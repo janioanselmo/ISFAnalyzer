@@ -513,7 +513,7 @@ def plot_ringdown_with_envelope(
                 customdata=peak_df[["peak_id"]],
                 selectedpoints=selected_point_indices if selected_point_indices else None,
                 marker=dict(size=10),
-                selected=dict(marker=dict(size=15, symbol="diamond")),
+                selected=dict(marker=dict(size=15)),
                 unselected=dict(marker=dict(opacity=0.72)),
             )
         )

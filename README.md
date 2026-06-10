@@ -1,8 +1,8 @@
-# ISF Analyzer v0.2.3
+# ISF Analyzer v0.2.4
 
 Analisador local para formas de onda Tektronix `.ISF`, com foco em pulso, ringing, ressonância e eletroporação.
 
-## Novidades da v0.2.3
+## Novidades da v0.2.4
 
 - Nome da aplicação alterado para **ISF Analyzer**.
 - Seleção de picos por **clique direto no mouse**.
