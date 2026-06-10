@@ -1,42 +1,33 @@
-# ISF Analyzer v0.2.5
+# ISF Analyzer v0.2.6
 
 Analisador local para formas de onda Tektronix `.ISF`, com foco em pulso, ringing, ressonância e eletroporação.
 
-## Novidades da v0.2.5
+## Novidades da v0.2.6
 
-- Nome da aplicação alterado para **ISF Analyzer**.
-- Seleção de picos por **clique direto no mouse**.
-- Cada clique alterna o estado do pico: seleciona ou desmarca.
-- Permite escolher 2, 3, 4 ou mais picos, em qualquer região da oscilação/ringdown.
-- A envoltória exponencial é recalculada automaticamente a partir dos picos selecionados.
-- Mantém fallback automático para os últimos N picos quando não há seleção manual.
+- Interface da aba **Análise de sinais** simplificada para quatro operações curtas e exclusivas:
+  - **Sinais**: visualização e métricas gerais.
+  - **Envelope**: seleção manual de picos por clique e ajuste exponencial.
+  - **Comparação**: análise antes × depois.
+  - **Potência**: análise V × I / potência.
+- A operação **Envelope** agora segue um fluxo em três passos:
+  1. ajustar janela e detecção de picos;
+  2. clicar nos picos desejados;
+  3. visualizar a envoltória exponencial calculada.
+- O ajuste da envoltória não é mais feito automaticamente por padrão quando nenhum pico é selecionado.
+- Adicionado botão **Usar últimos N** para triagem rápida.
+- Seleções manuais são mantidas por arquivo, permitindo comparar envelopes de diferentes curvas carregadas.
+- Adicionado segundo gráfico dedicado somente ao ajuste exponencial dos picos selecionados.
+- Adicionada opção de ampliar o eixo Y nos picos, útil quando o pulso principal é muito maior que o ringing.
 
-## Abas principais
+## Como usar a seleção de envelope
 
-1. **Análise de sinais**
-   - Visão geral / formas de onda
-   - Ressonância e envoltória
-   - Antes × depois
-   - V × I / potência
-
-2. **Exportação**
-   - Métricas gerais
-   - Métricas de ringing
-   - Forma de onda individual em CSV
-
-3. **Cabeçalho**
-   - Metadados extraídos
-   - Cabeçalho bruto Tektronix
-
-## Como usar a seleção por clique
-
-1. Carregue um ou mais arquivos `.ISF`.
-2. Ajuste a janela de ringing na barra lateral.
-3. Entre em **Análise de sinais → Ressonância e envoltória**.
-4. Clique diretamente nos marcadores dos picos que deseja usar no ajuste.
-5. Clique novamente em um pico selecionado para desmarcá-lo.
-6. O software recalcula automaticamente a envoltória exponencial.
-7. Use **Limpar seleção** para voltar ao modo automático.
+1. Carregue um ou mais arquivos `.ISF` na barra lateral.
+2. Entre em **Análise de sinais → Envelope**.
+3. Escolha o arquivo.
+4. Ajuste início/fim da janela onde estão os picos de interesse.
+5. Clique nos marcadores dos picos no gráfico superior.
+6. Use pelo menos 2 picos para gerar a envoltória exponencial no gráfico inferior.
+7. Para comparar vários arquivos, selecione os picos de cada arquivo. A comparação usa as seleções salvas por arquivo.
 
 O modelo ajustado é:
 
@@ -67,18 +58,10 @@ run_windows.bat
 bash run_linux_mac.sh
 ```
 
-## Observação
+## Dependência para clique em picos
 
-A seleção por clique usa o componente `streamlit-plotly-events`. Se a seleção por clique não aparecer, reinstale as dependências:
+A seleção por clique usa `streamlit-plotly-events`:
 
 ```bash
 pip install -r requirements.txt
 ```
-
-
-## v0.2.5
-
-- Corrige visualização vazia na seleção de picos por clique.
-- Troca o gráfico interativo de ringdown para `Scatter` SVG na área clicável.
-- Força ranges X/Y coerentes com a janela de ringing e com os picos detectados.
-- Mantém seleção/desseleção por clique nos marcadores dos picos.
