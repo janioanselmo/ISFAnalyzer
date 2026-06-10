@@ -1,6 +1,6 @@
 # Changelog
 
-## v0.2.9 - Visible click peaks
+## v0.3.0 - Visible click peaks
 
 - Fixes blank/empty click-selection plots in the Envelope workflow.
 - Separates the visual waveform context from the click target graph.

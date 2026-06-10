@@ -37,7 +37,7 @@ st.set_page_config(
 )
 
 
-APP_VERSION = "0.2.9-visible-click-peaks"
+APP_VERSION = "0.3.0-clickable-envelope"
 
 
 def _format_metric(value: float, unit: str = "", precision: int = 4) -> str:
@@ -666,11 +666,11 @@ def _state_suffix(name: str) -> str:
 
 
 def _peak_selection_key(file_name: str) -> str:
-    return f"envelope_selected_peak_ids_{_state_suffix(file_name)}_v029"
+    return f"envelope_selected_peak_ids_{_state_suffix(file_name)}_v030"
 
 
 def _last_click_key(file_name: str) -> str:
-    return f"envelope_last_click_signature_{_state_suffix(file_name)}_v029"
+    return f"envelope_last_click_signature_{_state_suffix(file_name)}_v030"
 
 
 def selected_peak_ids_for_file(file_name: str) -> list[int]:
@@ -767,7 +767,14 @@ def plot_envelope_context_graph(
     max_points: int,
     focus_y_on_peaks: bool = True,
 ):
-    """Static, reliable waveform plot used as visual context for peak selection."""
+    """Clickable waveform plot used for manual peak selection.
+
+    This figure is intentionally rendered with regular SVG Scatter traces, not
+    Scattergl, because the Streamlit click component is substantially more
+    reliable with SVG traces. The waveform line is visual context only; the
+    peak markers carry customdata with peak_id and are the intended click
+    targets.
+    """
     t = item["time_s"]
     y, _baseline = subtract_baseline(t, item["value"], mode=baseline_mode)
     t_win, y_win, _indices = slice_window_us(t, y, start_us, end_us)
@@ -776,11 +783,13 @@ def plot_envelope_context_graph(
     if len(t_win):
         t_plot, y_plot = decimate_for_plot(t_win, y_win, max_points=max_points)
         fig.add_trace(
-            go.Scattergl(
+            go.Scatter(
                 x=t_plot * 1e6,
                 y=y_plot,
                 mode="lines",
                 name="sinal na janela",
+                line=dict(width=1.5),
+                hoverinfo="skip",
             )
         )
 
@@ -790,22 +799,34 @@ def plot_envelope_context_graph(
         selected = peak_df[peak_df["peak_id"].isin(selected_set)]
         if not unselected.empty:
             fig.add_trace(
-                go.Scattergl(
+                go.Scatter(
                     x=unselected["tempo_us"],
                     y=unselected["amplitude"],
                     mode="markers",
-                    name="picos detectados",
-                    marker=dict(size=8, symbol="circle-open"),
+                    name="clique para selecionar",
+                    customdata=unselected["peak_id"].astype(int).tolist(),
+                    marker=dict(size=17, symbol="circle-open", line=dict(width=2)),
+                    hovertemplate=(
+                        "Pico %{customdata}<br>"
+                        "Tempo: %{x:.3f} µs<br>"
+                        "Amplitude: %{y:.3f}<extra></extra>"
+                    ),
                 )
             )
         if not selected.empty:
             fig.add_trace(
-                go.Scattergl(
+                go.Scatter(
                     x=selected["tempo_us"],
                     y=selected["amplitude"],
                     mode="markers",
-                    name="picos selecionados",
-                    marker=dict(size=14, symbol="diamond-open"),
+                    name="selecionados",
+                    customdata=selected["peak_id"].astype(int).tolist(),
+                    marker=dict(size=23, symbol="diamond-open", line=dict(width=3)),
+                    hovertemplate=(
+                        "Selecionado %{customdata}<br>"
+                        "Tempo: %{x:.3f} µs<br>"
+                        "Amplitude: %{y:.3f}<extra></extra>"
+                    ),
                 )
             )
 
@@ -813,10 +834,11 @@ def plot_envelope_context_graph(
         t_win, y_win, peak_df, start_us, end_us, focus_y_on_peaks=focus_y_on_peaks
     )
     fig.update_layout(
-        height=380,
+        height=470,
         xaxis_title="Tempo (µs)",
         yaxis_title="Amplitude corrigida",
-        hovermode="x unified",
+        hovermode="closest",
+        clickmode="event+select",
         margin=dict(l=40, r=20, t=35, b=40),
         legend_title="",
     )
@@ -1323,7 +1345,7 @@ with tab_signal:
                 action_cols = st.columns([1, 1, 4])
                 if action_cols[0].button(
                     "Limpar seleção",
-                    key=f"clear_peak_selection_{_state_suffix(ring_item['name'])}_v029",
+                    key=f"clear_peak_selection_{_state_suffix(ring_item['name'])}_v030",
                 ):
                     set_selected_peak_ids_for_file(ring_item["name"], [])
                     st.session_state[last_click_state_key] = None
@@ -1344,49 +1366,39 @@ with tab_signal:
                     max_points=max_plot_points,
                     focus_y_on_peaks=focus_y,
                 )
-                st.plotly_chart(
-                    fig_context,
-                    use_container_width=True,
-                    key=f"envelope_context_{_state_suffix(ring_item['name'])}_v029",
-                )
 
                 if peak_df.empty:
                     st.warning(
                         "Nenhum pico foi detectado nessa janela. Ajuste o início/fim, reduza o limiar "
                         "ou diminua a distância mínima entre picos."
                     )
-                else:
-                    st.caption("Clique nos marcadores grandes abaixo. Este gráfico contém apenas picos para o clique ficar confiável.")
-
-                fig_click = plot_peak_selection_graph(
-                    ring_item,
-                    peak_df,
-                    selected_peak_ids=selected_ids,
-                    start_us=env_start_us,
-                    end_us=env_end_us,
-                    baseline_mode=baseline_mode,
-                    max_points=max_plot_points,
-                    focus_y_on_peaks=focus_y,
-                )
-
-                if plotly_events is None:
+                    st.plotly_chart(
+                        fig_context,
+                        use_container_width=True,
+                        key=f"envelope_empty_context_{_state_suffix(ring_item['name'])}_v030",
+                    )
+                elif plotly_events is None:
                     st.error(
                         "O componente de clique não está instalado. Rode: "
                         "pip install streamlit-plotly-events"
                     )
                     st.plotly_chart(
-                        fig_click,
+                        fig_context,
                         use_container_width=True,
-                        key=f"envelope_static_select_{_state_suffix(ring_item['name'])}_v029",
+                        key=f"envelope_static_select_{_state_suffix(ring_item['name'])}_v030",
                     )
                 else:
+                    st.caption(
+                        "Este gráfico é o seletor: clique uma vez diretamente em um círculo de pico. "
+                        "Depois do clique, a contagem e a envoltória abaixo são atualizadas."
+                    )
                     clicked_points = plotly_events(
-                        fig_click,
+                        fig_context,
                         click_event=True,
                         hover_event=False,
                         select_event=False,
-                        override_height=300,
-                        key=f"envelope_click_toggle_{_state_suffix(ring_item['name'])}_v029",
+                        override_height=470,
+                        key=f"envelope_click_main_{_state_suffix(ring_item['name'])}_v030",
                     )
                     changed = toggle_peak_selection_from_clicks(
                         clicked_points,
@@ -1395,7 +1407,8 @@ with tab_signal:
                         last_click_state_key=last_click_state_key,
                     )
                     if changed:
-                        st.rerun()
+                        selected_ids = selected_peak_ids_for_file(ring_item["name"])
+                        st.success(f"Pico selecionado/removido. Total: {len(selected_ids)}.")
 
                 selected_ids = selected_peak_ids_for_file(ring_item["name"])
                 valid_ids = set(peak_df["peak_id"].to_list()) if not peak_df.empty else set()
@@ -1421,7 +1434,7 @@ with tab_signal:
                 st.plotly_chart(
                     fig_fit,
                     use_container_width=True,
-                    key=f"envelope_fit_{_state_suffix(ring_item['name'])}_v029",
+                    key=f"envelope_fit_{_state_suffix(ring_item['name'])}_v030",
                 )
 
                 metric_cols = st.columns(4)
@@ -1464,14 +1477,14 @@ with tab_signal:
             )
             envelope_df = pd.DataFrame(envelope_rows)
             fig_cmp = plot_envelope_comparison(envelope_df, normalize=normalize_env)
-            st.plotly_chart(fig_cmp, use_container_width=True, key="envelope_compare_chart_v029")
+            st.plotly_chart(fig_cmp, use_container_width=True, key="envelope_compare_chart_v030")
             st.dataframe(compact_metrics_table(envelope_rows), use_container_width=True)
             st.download_button(
                 "Baixar comparação de envelopes em CSV",
                 data=envelope_df.to_csv(index=False).encode("utf-8"),
                 file_name="comparacao_envelopes_exponenciais.csv",
                 mime="text/csv",
-                key="download_envelope_compare_v029",
+                key="download_envelope_compare_v030",
             )
 
     elif analysis_mode == "Comparação":
