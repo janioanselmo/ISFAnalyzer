@@ -1,33 +1,28 @@
 # Changelog
 
-## v0.2.2 - Envelope analysis
+## v0.2.3 - Click peak selection
 
 Suggested commit:
 
 ```text
-Add selectable exponential ringdown envelope analysis
+Add click-based peak selection for envelope fitting
 ```
 
 ### Added
 
-- Mouse selection of ringdown peaks using Plotly box/lasso selection.
-- Exponential envelope fitting from selected peaks.
-- Automatic fallback to the last N detected peaks when no manual selection is made.
-- Envelope comparison across multiple loaded ISF files.
-- Normalized envelope overlay for before/after electroporation comparisons.
-- CSV export for envelope metrics.
+- Click-based peak selection for ringdown envelope fitting.
+- Peak toggle behavior: click to select, click again to remove.
+- Automatic envelope refit after every peak selection change.
+- Optional fallback to native Streamlit point selection if `streamlit-plotly-events` is unavailable.
 
 ### Changed
 
-- Reduced redundancy in the signal analysis screen.
-- Merged single-signal and multi-signal visualization into **Visão geral / formas de onda**.
-- Kept only four operations inside the main analysis tab:
-  - Visão geral / formas de onda
-  - Ressonância e envoltória
-  - Antes × depois
-  - V × I / potência
+- Renamed application from ENSA ISF Analyzer to **ISF Analyzer**.
+- Updated app title, page title, README and package naming for academic use.
+- Replaced box/lasso-first workflow with direct click-based peak selection.
 
 ### Notes
 
-- The envelope fit uses `|V_peak| = A0 * exp(-(t - t0) / tau)`.
-- `tau_us` and decay-per-cycle are exploratory resonance markers and should be interpreted together with repeatability, sample geometry, conductivity and electrode contact.
+- The selected peaks define the exponential envelope fit.
+- If no peaks are manually selected, the app still uses the last N detected peaks as a fallback.
+- Use the same selected peak count and comparable ringdown windows when comparing before/after electroporation.

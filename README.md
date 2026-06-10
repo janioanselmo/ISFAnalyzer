@@ -1,16 +1,15 @@
-# ENSA ISF Analyzer v0.2.2
+# ISF Analyzer v0.2.3
 
-Mini-IDE local para análise de formas de onda Tektronix `.ISF`, com foco em eletroporação, PEF e assinatura ressonante/ringdown.
+Analisador local para formas de onda Tektronix `.ISF`, com foco em pulso, ringing, ressonância e eletroporação.
 
-## Novidades da v0.2.2
+## Novidades da v0.2.3
 
-- Interface otimizada dentro da aba **Análise de sinais**.
-- Fusão das análises de sinal único e múltiplos sinais em **Visão geral / formas de onda**.
-- Nova análise **Ressonância e envoltória**.
-- Seleção de picos com mouse no gráfico Plotly usando box/lasso.
-- Ajuste de envoltória exponencial nos picos selecionados ou nos últimos N picos detectados.
-- Comparação das envoltórias exponenciais entre vários arquivos carregados.
-- Exportação das métricas da envoltória em CSV.
+- Nome da aplicação alterado para **ISF Analyzer**.
+- Seleção de picos por **clique direto no mouse**.
+- Cada clique alterna o estado do pico: seleciona ou desmarca.
+- Permite escolher 2, 3, 4 ou mais picos, em qualquer região da oscilação/ringdown.
+- A envoltória exponencial é recalculada automaticamente a partir dos picos selecionados.
+- Mantém fallback automático para os últimos N picos quando não há seleção manual.
 
 ## Abas principais
 
@@ -29,15 +28,15 @@ Mini-IDE local para análise de formas de onda Tektronix `.ISF`, com foco em ele
    - Metadados extraídos
    - Cabeçalho bruto Tektronix
 
-## Como usar a envoltória exponencial
+## Como usar a seleção por clique
 
 1. Carregue um ou mais arquivos `.ISF`.
 2. Ajuste a janela de ringing na barra lateral.
 3. Entre em **Análise de sinais → Ressonância e envoltória**.
-4. Escolha o sinal.
-5. Selecione os picos finais com o mouse usando box/lasso no gráfico.
-6. Se nenhum pico for selecionado, o software usa automaticamente os últimos N picos detectados.
-7. Compare o valor de `tau_us`, `decaimento_por_periodo_percent`, `r2_envelope` e as curvas normalizadas entre os arquivos.
+4. Clique diretamente nos marcadores dos picos que deseja usar no ajuste.
+5. Clique novamente em um pico selecionado para desmarcá-lo.
+6. O software recalcula automaticamente a envoltória exponencial.
+7. Use **Limpar seleção** para voltar ao modo automático.
 
 O modelo ajustado é:
 
@@ -65,18 +64,13 @@ run_windows.bat
 ### Linux/macOS
 
 ```bash
-python3 -m venv .venv
-source .venv/bin/activate
-pip install -r requirements.txt
-streamlit run app.py
-```
-
-Ou execute:
-
-```bash
 bash run_linux_mac.sh
 ```
 
-## Observação de desempenho
+## Observação
 
-Streamlit é ótimo para prototipagem científica, mas pode ficar lento com muitos arquivos `.ISF` grandes porque o navegador precisa renderizar muitos pontos e o script é reexecutado a cada interação. Para uso com muitos ensaios, a recomendação futura é migrar a visualização pesada para PySide6/PyQtGraph, mantendo o núcleo de análise NumPy/Pandas.
+A seleção por clique usa o componente `streamlit-plotly-events`. Se a seleção por clique não aparecer, reinstale as dependências:
+
+```bash
+pip install -r requirements.txt
+```
