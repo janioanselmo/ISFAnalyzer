@@ -31,7 +31,7 @@ st.set_page_config(
 )
 
 
-APP_VERSION = "0.2.0-resonance"
+APP_VERSION = "0.2.1-signal-tabs"
 
 
 def _format_metric(value: float, unit: str = "", precision: int = 4) -> str:
@@ -336,314 +336,377 @@ ring_metrics = [
 ]
 ring_metrics_df = metrics_dataframe(ring_metrics)
 
-(
-    tab_single,
-    tab_ring,
-    tab_before_after,
-    tab_multi,
-    tab_vi,
-    tab_export,
-    tab_header,
-) = st.tabs(
+
+
+tab_signal, tab_export, tab_header = st.tabs(
     [
-        "Sinal único",
-        "Ressonância / ringing",
-        "Antes × depois",
-        "Múltiplos sinais",
-        "V × I / potência",
+        "Análise de sinais",
         "Exportação",
-        "Cabeçalho ISF",
+        "Cabeçalho",
     ]
 )
 
-with tab_single:
-    selected_name = st.selectbox(
-        "Selecione o sinal",
-        [item["name"] for item in waveforms],
-        key="single_select_signal",
-    )
-    selected = next(item for item in waveforms if item["name"] == selected_name)
-    selected_metrics = next(row for row in metrics if row["arquivo"] == selected_name)
-
-    cols = st.columns(5)
-    cols[0].metric("Vmax", _format_metric(selected_metrics["v_max"], "V"))
-    cols[1].metric("Vmin", _format_metric(selected_metrics["v_min"], "V"))
-    cols[2].metric("Vpp", _format_metric(selected_metrics["v_pp"], "V"))
-    cols[3].metric("Campo", _format_metric(selected_metrics["campo_kv_cm"], "kV/cm"))
-    cols[4].metric("Freq. FFT", _format_metric(selected_metrics["freq_fft_khz"], "kHz"))
-
-    cols = st.columns(5)
-    cols[0].metric("Pulso início", _format_metric(selected_metrics["pulso_inicio_us"], "µs"))
-    cols[1].metric("Pulso fim", _format_metric(selected_metrics["pulso_fim_us"], "µs"))
-    cols[2].metric("Largura", _format_metric(selected_metrics["largura_pulso_us"], "µs"))
-    cols[3].metric("Energia aprox.", _format_metric(selected_metrics["energia_resistiva_j"], "J"))
-    cols[4].metric("RMS", _format_metric(selected_metrics["rms_corrigido"], "V"))
-
-    corrected = st.checkbox("Subtrair linha de base no gráfico", value=False, key="single_corrected")
-    fig = plot_waveforms(
-        [selected],
-        corrected=corrected,
-        baseline_mode=baseline_mode,
-        max_points=max_plot_points,
-    )
-    st.plotly_chart(fig, use_container_width=True, key="single_waveform_chart_v020")
-
-    st.subheader("Métricas completas")
-    st.dataframe(
-        pd.DataFrame([selected_metrics]).T.rename(columns={0: "valor"}),
-        use_container_width=True,
+with tab_signal:
+    st.subheader("Análise de sinais")
+    st.caption(
+        "Área única para sinal individual, múltiplos sinais, ressonância/ringing, "
+        "comparação antes × depois e análise V × I / potência."
     )
 
-with tab_ring:
-    st.subheader("Análise da oscilação natural / ringdown")
-    ring_name = st.selectbox(
-        "Selecione o sinal para ringing",
-        [item["name"] for item in waveforms],
-        key="ring_select_signal",
+    summary_cols = st.columns(4)
+    summary_cols[0].metric("Arquivos carregados", len(waveforms))
+    summary_cols[1].metric("Gap", _format_metric(gap_mm, "mm"))
+    summary_cols[2].metric("Carga equivalente", _format_metric(resistance_ohm, "Ω"))
+    summary_cols[3].metric(
+        "Janela de ringing",
+        f"{ring_start_us:g} a {ring_end_us:g} µs",
     )
-    ring_item = next(item for item in waveforms if item["name"] == ring_name)
-    ring_row = next(row for row in ring_metrics if row["arquivo"] == ring_name)
 
-    cols = st.columns(6)
-    cols[0].metric("Período", _format_metric(ring_row["period_peaks_us"], "µs"))
-    cols[1].metric("Freq. amortecida", _format_metric(ring_row["freq_damped_khz"], "kHz"))
-    cols[2].metric("τ envelope", _format_metric(ring_row["tau_envelope_us"], "µs"))
-    cols[3].metric("ζ", _format_metric(ring_row["damping_ratio_zeta"], ""))
-    cols[4].metric("Q", _format_metric(ring_row["quality_factor_q"], ""))
-    cols[5].metric("Energia ringing", _format_metric(ring_row["ring_energy_resistive_j"], "J"))
-
-    cols = st.columns(5)
-    cols[0].metric("Decremento log.", _format_metric(ring_row["log_decrement"], ""))
-    cols[1].metric("Decaimento/ciclo", _format_metric(ring_row["decay_per_cycle_percent"], "%"))
-    cols[2].metric("R² envelope", _format_metric(ring_row["envelope_r2"], ""))
-    cols[3].metric("Picos detectados", _format_metric(ring_row["n_extrema"], "", precision=0))
-    cols[4].metric("Assimetria +/−", _format_metric(ring_row["asymmetry_pos_neg"], ""))
-
-    fig_ring, peak_df = plot_ringdown(
-        ring_item,
-        start_us=ring_start_us,
-        end_us=ring_end_us,
-        baseline_mode=baseline_mode,
-        peak_threshold_fraction=peak_threshold_fraction,
-        min_peak_distance_us=min_peak_distance_us,
-        max_points=max_plot_points,
+    analysis_mode = st.radio(
+        "Escolha a operação",
+        [
+            "Sinal único",
+            "Múltiplos sinais",
+            "Ressonância / ringing",
+            "Antes × depois",
+            "V × I / potência",
+        ],
+        horizontal=True,
+        key="signal_analysis_mode_v021",
     )
-    st.plotly_chart(fig_ring, use_container_width=True, key="ringdown_chart_v020")
 
-    col_table_a, col_table_b = st.columns(2)
-    with col_table_a:
-        st.subheader("Métricas de ringing")
-        st.dataframe(
-            pd.DataFrame([ring_row]).T.rename(columns={0: "valor"}),
-            use_container_width=True,
-        )
-    with col_table_b:
-        st.subheader("Picos detectados")
-        st.dataframe(peak_df, use_container_width=True)
-
-with tab_before_after:
-    st.subheader("Comparação antes × depois da eletroporação")
-    if len(waveforms) < 2:
-        st.warning("Carregue pelo menos dois arquivos para comparar antes e depois.")
-    else:
-        col_ba_1, col_ba_2 = st.columns(2)
-        before_name = col_ba_1.selectbox(
-            "Sinal ANTES",
+    if analysis_mode == "Sinal único":
+        selected_name = st.selectbox(
+            "Selecione o sinal",
             [item["name"] for item in waveforms],
-            index=0,
-            key="before_after_before_select",
+            key="single_select_signal_v021",
         )
-        after_name = col_ba_2.selectbox(
-            "Sinal DEPOIS",
-            [item["name"] for item in waveforms],
-            index=min(1, len(waveforms) - 1),
-            key="before_after_after_select",
-        )
-        before_item = next(item for item in waveforms if item["name"] == before_name)
-        after_item = next(item for item in waveforms if item["name"] == after_name)
-        before_ring = next(row for row in ring_metrics if row["arquivo"] == before_name)
-        after_ring = next(row for row in ring_metrics if row["arquivo"] == after_name)
-
-        compare_df = compare_ringdown_metrics(before_ring, after_ring)
-        shift_score = resonance_shift_score(compare_df)
-        similarity = waveform_similarity_metrics(
-            before_name,
-            before_item["time_s"],
-            before_item["value"],
-            after_name,
-            after_item["time_s"],
-            after_item["value"],
-            start_us=ring_start_us,
-            end_us=ring_end_us,
-            baseline_mode=baseline_mode,
-        )
+        selected = next(item for item in waveforms if item["name"] == selected_name)
+        selected_metrics = next(row for row in metrics if row["arquivo"] == selected_name)
 
         cols = st.columns(5)
-        period_delta = compare_df.loc[compare_df["metrica"] == "period_peaks_us", "delta_percent"].iloc[0]
-        freq_delta = compare_df.loc[compare_df["metrica"] == "freq_damped_khz", "delta_percent"].iloc[0]
-        tau_delta = compare_df.loc[compare_df["metrica"] == "tau_envelope_us", "delta_percent"].iloc[0]
-        q_delta = compare_df.loc[compare_df["metrica"] == "quality_factor_q", "delta_percent"].iloc[0]
-        energy_delta = compare_df.loc[compare_df["metrica"] == "ring_energy_resistive_j", "delta_percent"].iloc[0]
-        cols[0].metric("Δ período", _format_metric(period_delta, "%"))
-        cols[1].metric("Δ frequência", _format_metric(freq_delta, "%"))
-        cols[2].metric("Δ τ", _format_metric(tau_delta, "%"))
-        cols[3].metric("Δ Q", _format_metric(q_delta, "%"))
-        cols[4].metric("Δ energia", _format_metric(energy_delta, "%"))
+        cols[0].metric("Vmax", _format_metric(selected_metrics["v_max"], "V"))
+        cols[1].metric("Vmin", _format_metric(selected_metrics["v_min"], "V"))
+        cols[2].metric("Vpp", _format_metric(selected_metrics["v_pp"], "V"))
+        cols[3].metric("Campo", _format_metric(selected_metrics["campo_kv_cm"], "kV/cm"))
+        cols[4].metric("Freq. FFT", _format_metric(selected_metrics["freq_fft_khz"], "kHz"))
 
-        cols = st.columns(4)
-        cols[0].metric("Resonance shift score", _format_metric(shift_score, "%"))
-        cols[1].metric("Correlação", _format_metric(similarity["pearson_r"], ""))
-        cols[2].metric("NRMSE", _format_metric(similarity["nrmse"], ""))
-        cols[3].metric("Atraso xcorr", _format_metric(similarity["delay_xcorr_us"], "µs"))
+        cols = st.columns(5)
+        cols[0].metric("Pulso início", _format_metric(selected_metrics["pulso_inicio_us"], "µs"))
+        cols[1].metric("Pulso fim", _format_metric(selected_metrics["pulso_fim_us"], "µs"))
+        cols[2].metric("Largura", _format_metric(selected_metrics["largura_pulso_us"], "µs"))
+        cols[3].metric("Energia aprox.", _format_metric(selected_metrics["energia_resistiva_j"], "J"))
+        cols[4].metric("RMS", _format_metric(selected_metrics["rms_corrigido"], "V"))
 
-        normalize_ba = st.checkbox(
-            "Normalizar curvas antes/depois pelo pico absoluto",
+        corrected = st.checkbox(
+            "Subtrair linha de base no gráfico",
             value=False,
-            key="before_after_normalize",
+            key="single_corrected_v021",
         )
-        fig_ba = plot_waveforms(
-            [before_item, after_item],
-            normalize=normalize_ba,
-            corrected=True,
+        fig = plot_waveforms(
+            [selected],
+            corrected=corrected,
             baseline_mode=baseline_mode,
             max_points=max_plot_points,
-            start_us=ring_start_us,
-            end_us=ring_end_us,
         )
-        st.plotly_chart(fig_ba, use_container_width=True, key="before_after_overlay_chart_v020")
+        st.plotly_chart(fig, use_container_width=True, key="single_waveform_chart_v021")
 
-        st.subheader("Tabela de variações do ringing")
-        st.dataframe(compare_df, use_container_width=True)
-
-        st.subheader("Métricas de similaridade de forma de onda")
+        st.subheader("Métricas completas")
         st.dataframe(
-            pd.DataFrame([similarity]).T.rename(columns={0: "valor"}),
+            pd.DataFrame([selected_metrics]).T.rename(columns={0: "valor"}),
             use_container_width=True,
         )
 
-        st.download_button(
-            "Baixar comparação antes-depois em CSV",
-            data=compare_df.to_csv(index=False).encode("utf-8"),
-            file_name="comparacao_antes_depois_ringdown.csv",
-            mime="text/csv",
-            key="download_before_after_csv_v020",
+    elif analysis_mode == "Múltiplos sinais":
+        st.subheader("Comparação de formas de onda")
+        col_a, col_b, col_c = st.columns(3)
+        normalize = col_a.checkbox(
+            "Normalizar pelo pico absoluto",
+            value=False,
+            key="multi_normalize_v021",
+        )
+        corrected_multi = col_b.checkbox(
+            "Subtrair linha de base",
+            value=False,
+            key="multi_corrected_v021",
+        )
+        only_ring_window = col_c.checkbox(
+            "Mostrar só janela de ringing",
+            value=False,
+            key="multi_only_ring_v021",
         )
 
-with tab_multi:
-    st.subheader("Comparação de formas de onda")
-    col_a, col_b, col_c = st.columns(3)
-    normalize = col_a.checkbox("Normalizar pelo pico absoluto", value=False, key="multi_normalize")
-    corrected_multi = col_b.checkbox("Subtrair linha de base", value=False, key="multi_corrected")
-    only_ring_window = col_c.checkbox("Mostrar só janela de ringing", value=False, key="multi_only_ring")
+        fig = plot_waveforms(
+            waveforms,
+            normalize=normalize,
+            corrected=corrected_multi,
+            baseline_mode=baseline_mode,
+            max_points=max_plot_points,
+            start_us=ring_start_us if only_ring_window else None,
+            end_us=ring_end_us if only_ring_window else None,
+        )
+        st.plotly_chart(
+            fig,
+            use_container_width=True,
+            key="multi_waveform_comparison_chart_v021",
+        )
 
-    fig = plot_waveforms(
-        waveforms,
-        normalize=normalize,
-        corrected=corrected_multi,
-        baseline_mode=baseline_mode,
-        max_points=max_plot_points,
-        start_us=ring_start_us if only_ring_window else None,
-        end_us=ring_end_us if only_ring_window else None,
-    )
-    st.plotly_chart(fig, use_container_width=True, key="multi_waveform_comparison_chart_v020")
+        st.subheader("Tabela comparativa geral")
+        st.dataframe(metrics_df, use_container_width=True)
 
-    st.subheader("Tabela comparativa geral")
-    st.dataframe(metrics_df, use_container_width=True)
+        st.subheader("Tabela comparativa de ringing")
+        st.dataframe(ring_metrics_df, use_container_width=True)
 
-    st.subheader("Tabela comparativa de ringing")
-    st.dataframe(ring_metrics_df, use_container_width=True)
-
-with tab_vi:
-    st.subheader("Análise tensão × corrente")
-
-    if len(waveforms) < 2:
-        st.warning("Carregue pelo menos dois arquivos: um canal de tensão e um canal de corrente.")
-    else:
-        col1, col2, col3 = st.columns(3)
-        voltage_name = col1.selectbox(
-            "Canal de tensão",
+    elif analysis_mode == "Ressonância / ringing":
+        st.subheader("Análise da oscilação natural / ringdown")
+        ring_name = st.selectbox(
+            "Selecione o sinal para ringing",
             [item["name"] for item in waveforms],
-            index=0,
-            key="vi_voltage_select",
+            key="ring_select_signal_v021",
         )
-        current_name = col2.selectbox(
-            "Canal de corrente",
-            [item["name"] for item in waveforms],
-            index=min(1, len(waveforms) - 1),
-            key="vi_current_select",
-        )
-        current_scale = col3.number_input(
-            "Fator do canal de corrente (A por unidade lida)",
-            min_value=1e-12,
-            value=1.0,
-            step=0.1,
-            format="%.6g",
-            help="Use 1 se o arquivo já estiver em ampères. Se estiver em volts de shunt/probe, informe A/V.",
-            key="vi_current_scale",
-        )
-
-        voltage_item = next(item for item in waveforms if item["name"] == voltage_name)
-        current_item = next(item for item in waveforms if item["name"] == current_name)
-
-        t, v, i = align_current_to_voltage(
-            voltage_item["time_s"],
-            voltage_item["value"],
-            current_item["time_s"],
-            current_item["value"],
-            current_scale_a_per_unit=current_scale,
-        )
-        p = v * i
-        vi = vi_metrics(t, v, i)
+        ring_item = next(item for item in waveforms if item["name"] == ring_name)
+        ring_row = next(row for row in ring_metrics if row["arquivo"] == ring_name)
 
         cols = st.columns(6)
-        cols[0].metric("Imax", _format_metric(vi.get("i_max"), "A"))
-        cols[1].metric("Imin", _format_metric(vi.get("i_min"), "A"))
-        cols[2].metric("Pmax", _format_metric(vi.get("p_max_w"), "W"))
-        cols[3].metric("Energia ∫Pdt", _format_metric(vi.get("energia_j"), "J"))
-        cols[4].metric("Carga ∫Idt", _format_metric(vi.get("carga_c"), "C"))
-        cols[5].metric("R efetiva", _format_metric(vi.get("resistencia_efetiva_ohm"), "Ω"))
+        cols[0].metric("Período", _format_metric(ring_row["period_peaks_us"], "µs"))
+        cols[1].metric("Freq. amortecida", _format_metric(ring_row["freq_damped_khz"], "kHz"))
+        cols[2].metric("τ envelope", _format_metric(ring_row["tau_envelope_us"], "µs"))
+        cols[3].metric("ζ", _format_metric(ring_row["damping_ratio_zeta"], ""))
+        cols[4].metric("Q", _format_metric(ring_row["quality_factor_q"], ""))
+        cols[5].metric("Energia ringing", _format_metric(ring_row["ring_energy_resistive_j"], "J"))
 
-        cols = st.columns(4)
-        cols[0].metric("|Z| FFT", _format_metric(vi.get("impedancia_fft_mag_ohm"), "Ω"))
-        cols[1].metric("Fase Z FFT", _format_metric(vi.get("impedancia_fft_phase_deg"), "°"))
-        cols[2].metric("Delay V-I", _format_metric(vi.get("delay_v_i_xcorr_us"), "µs"))
-        cols[3].metric("xcorr V-I", _format_metric(vi.get("xcorr_v_i_peak"), ""))
+        cols = st.columns(5)
+        cols[0].metric("Decremento log.", _format_metric(ring_row["log_decrement"], ""))
+        cols[1].metric("Decaimento/ciclo", _format_metric(ring_row["decay_per_cycle_percent"], "%"))
+        cols[2].metric("R² envelope", _format_metric(ring_row["envelope_r2"], ""))
+        cols[3].metric("Picos detectados", _format_metric(ring_row["n_extrema"], "", precision=0))
+        cols[4].metric("Assimetria +/−", _format_metric(ring_row["asymmetry_pos_neg"], ""))
 
-        t_plot, p_plot = decimate_for_plot(t, p, max_points=max_plot_points)
-        fig_p = go.Figure()
-        fig_p.add_trace(
-            go.Scattergl(x=t_plot * 1e6, y=p_plot, mode="lines", name="P(t)=V(t)I(t)")
+        fig_ring, peak_df = plot_ringdown(
+            ring_item,
+            start_us=ring_start_us,
+            end_us=ring_end_us,
+            baseline_mode=baseline_mode,
+            peak_threshold_fraction=peak_threshold_fraction,
+            min_peak_distance_us=min_peak_distance_us,
+            max_points=max_plot_points,
         )
-        fig_p.update_layout(
-            height=500,
-            xaxis_title="Tempo (µs)",
-            yaxis_title="Potência (W)",
-            hovermode="x unified",
-            margin=dict(l=40, r=20, t=40, b=40),
-        )
-        fig_p.update_xaxes(showgrid=True)
-        fig_p.update_yaxes(showgrid=True)
-        st.plotly_chart(fig_p, use_container_width=True, key="vi_power_chart_v020")
+        st.plotly_chart(fig_ring, use_container_width=True, key="ringdown_chart_v021")
 
-        st.subheader("Métricas V-I-P")
-        st.dataframe(pd.DataFrame([vi]).T.rename(columns={0: "valor"}), use_container_width=True)
+        col_table_a, col_table_b = st.columns(2)
+        with col_table_a:
+            st.subheader("Métricas de ringing")
+            st.dataframe(
+                pd.DataFrame([ring_row]).T.rename(columns={0: "valor"}),
+                use_container_width=True,
+            )
+        with col_table_b:
+            st.subheader("Picos detectados")
+            st.dataframe(peak_df, use_container_width=True)
 
-        st.download_button(
-            "Baixar V-I-P em CSV",
-            data=vip_csv_bytes(t, v, i, p),
-            file_name="analise_v_i_p.csv",
-            mime="text/csv",
-            key="download_vip_csv_v020",
-        )
+    elif analysis_mode == "Antes × depois":
+        st.subheader("Comparação antes × depois da eletroporação")
+        if len(waveforms) < 2:
+            st.warning("Carregue pelo menos dois arquivos para comparar antes e depois.")
+        else:
+            col_ba_1, col_ba_2 = st.columns(2)
+            before_name = col_ba_1.selectbox(
+                "Sinal ANTES",
+                [item["name"] for item in waveforms],
+                index=0,
+                key="before_after_before_select_v021",
+            )
+            after_name = col_ba_2.selectbox(
+                "Sinal DEPOIS",
+                [item["name"] for item in waveforms],
+                index=min(1, len(waveforms) - 1),
+                key="before_after_after_select_v021",
+            )
+            before_item = next(item for item in waveforms if item["name"] == before_name)
+            after_item = next(item for item in waveforms if item["name"] == after_name)
+            before_ring = next(row for row in ring_metrics if row["arquivo"] == before_name)
+            after_ring = next(row for row in ring_metrics if row["arquivo"] == after_name)
+
+            compare_df = compare_ringdown_metrics(before_ring, after_ring)
+            shift_score = resonance_shift_score(compare_df)
+            similarity = waveform_similarity_metrics(
+                before_name,
+                before_item["time_s"],
+                before_item["value"],
+                after_name,
+                after_item["time_s"],
+                after_item["value"],
+                start_us=ring_start_us,
+                end_us=ring_end_us,
+                baseline_mode=baseline_mode,
+            )
+
+            cols = st.columns(5)
+            period_delta = compare_df.loc[
+                compare_df["metrica"] == "period_peaks_us", "delta_percent"
+            ].iloc[0]
+            freq_delta = compare_df.loc[
+                compare_df["metrica"] == "freq_damped_khz", "delta_percent"
+            ].iloc[0]
+            tau_delta = compare_df.loc[
+                compare_df["metrica"] == "tau_envelope_us", "delta_percent"
+            ].iloc[0]
+            q_delta = compare_df.loc[
+                compare_df["metrica"] == "quality_factor_q", "delta_percent"
+            ].iloc[0]
+            energy_delta = compare_df.loc[
+                compare_df["metrica"] == "ring_energy_resistive_j", "delta_percent"
+            ].iloc[0]
+            cols[0].metric("Δ período", _format_metric(period_delta, "%"))
+            cols[1].metric("Δ frequência", _format_metric(freq_delta, "%"))
+            cols[2].metric("Δ τ", _format_metric(tau_delta, "%"))
+            cols[3].metric("Δ Q", _format_metric(q_delta, "%"))
+            cols[4].metric("Δ energia", _format_metric(energy_delta, "%"))
+
+            cols = st.columns(4)
+            cols[0].metric("Resonance shift score", _format_metric(shift_score, "%"))
+            cols[1].metric("Correlação", _format_metric(similarity["pearson_r"], ""))
+            cols[2].metric("NRMSE", _format_metric(similarity["nrmse"], ""))
+            cols[3].metric("Atraso xcorr", _format_metric(similarity["delay_xcorr_us"], "µs"))
+
+            normalize_ba = st.checkbox(
+                "Normalizar curvas antes/depois pelo pico absoluto",
+                value=False,
+                key="before_after_normalize_v021",
+            )
+            fig_ba = plot_waveforms(
+                [before_item, after_item],
+                normalize=normalize_ba,
+                corrected=True,
+                baseline_mode=baseline_mode,
+                max_points=max_plot_points,
+                start_us=ring_start_us,
+                end_us=ring_end_us,
+            )
+            st.plotly_chart(
+                fig_ba,
+                use_container_width=True,
+                key="before_after_overlay_chart_v021",
+            )
+
+            st.subheader("Tabela de variações do ringing")
+            st.dataframe(compare_df, use_container_width=True)
+
+            st.subheader("Métricas de similaridade de forma de onda")
+            st.dataframe(
+                pd.DataFrame([similarity]).T.rename(columns={0: "valor"}),
+                use_container_width=True,
+            )
+
+            st.download_button(
+                "Baixar comparação antes-depois em CSV",
+                data=compare_df.to_csv(index=False).encode("utf-8"),
+                file_name="comparacao_antes_depois_ringdown.csv",
+                mime="text/csv",
+                key="download_before_after_csv_v021",
+            )
+
+    elif analysis_mode == "V × I / potência":
+        st.subheader("Análise tensão × corrente")
+
+        if len(waveforms) < 2:
+            st.warning("Carregue pelo menos dois arquivos: um canal de tensão e um canal de corrente.")
+        else:
+            col1, col2, col3 = st.columns(3)
+            voltage_name = col1.selectbox(
+                "Canal de tensão",
+                [item["name"] for item in waveforms],
+                index=0,
+                key="vi_voltage_select_v021",
+            )
+            current_name = col2.selectbox(
+                "Canal de corrente",
+                [item["name"] for item in waveforms],
+                index=min(1, len(waveforms) - 1),
+                key="vi_current_select_v021",
+            )
+            current_scale = col3.number_input(
+                "Fator do canal de corrente (A por unidade lida)",
+                min_value=1e-12,
+                value=1.0,
+                step=0.1,
+                format="%.6g",
+                help="Use 1 se o arquivo já estiver em ampères. Se estiver em volts de shunt/probe, informe A/V.",
+                key="vi_current_scale_v021",
+            )
+
+            voltage_item = next(item for item in waveforms if item["name"] == voltage_name)
+            current_item = next(item for item in waveforms if item["name"] == current_name)
+
+            t, v, i = align_current_to_voltage(
+                voltage_item["time_s"],
+                voltage_item["value"],
+                current_item["time_s"],
+                current_item["value"],
+                current_scale_a_per_unit=current_scale,
+            )
+            p = v * i
+            vi = vi_metrics(t, v, i)
+
+            cols = st.columns(6)
+            cols[0].metric("Imax", _format_metric(vi.get("i_max"), "A"))
+            cols[1].metric("Imin", _format_metric(vi.get("i_min"), "A"))
+            cols[2].metric("Pmax", _format_metric(vi.get("p_max_w"), "W"))
+            cols[3].metric("Energia ∫Pdt", _format_metric(vi.get("energia_j"), "J"))
+            cols[4].metric("Carga ∫Idt", _format_metric(vi.get("carga_c"), "C"))
+            cols[5].metric("R efetiva", _format_metric(vi.get("resistencia_efetiva_ohm"), "Ω"))
+
+            cols = st.columns(4)
+            cols[0].metric("|Z| FFT", _format_metric(vi.get("impedancia_fft_mag_ohm"), "Ω"))
+            cols[1].metric("Fase Z FFT", _format_metric(vi.get("impedancia_fft_phase_deg"), "°"))
+            cols[2].metric("Delay V-I", _format_metric(vi.get("delay_v_i_xcorr_us"), "µs"))
+            cols[3].metric("xcorr V-I", _format_metric(vi.get("xcorr_v_i_peak"), ""))
+
+            t_plot, p_plot = decimate_for_plot(t, p, max_points=max_plot_points)
+            fig_p = go.Figure()
+            fig_p.add_trace(
+                go.Scattergl(
+                    x=t_plot * 1e6,
+                    y=p_plot,
+                    mode="lines",
+                    name="P(t)=V(t)I(t)",
+                )
+            )
+            fig_p.update_layout(
+                height=500,
+                xaxis_title="Tempo (µs)",
+                yaxis_title="Potência (W)",
+                hovermode="x unified",
+                margin=dict(l=40, r=20, t=40, b=40),
+            )
+            fig_p.update_xaxes(showgrid=True)
+            fig_p.update_yaxes(showgrid=True)
+            st.plotly_chart(fig_p, use_container_width=True, key="vi_power_chart_v021")
+
+            st.subheader("Métricas V-I-P")
+            st.dataframe(
+                pd.DataFrame([vi]).T.rename(columns={0: "valor"}),
+                use_container_width=True,
+            )
+
+            st.download_button(
+                "Baixar V-I-P em CSV",
+                data=vip_csv_bytes(t, v, i, p),
+                file_name="analise_v_i_p.csv",
+                mime="text/csv",
+                key="download_vip_csv_v021",
+            )
 
 with tab_export:
     st.subheader("Exportação")
+    st.caption("Área dedicada para baixar métricas, ringing e formas de onda em CSV.")
+
     st.download_button(
         "Baixar métricas gerais em CSV",
         data=metrics_df.to_csv(index=False).encode("utf-8"),
         file_name="metricas_isf.csv",
         mime="text/csv",
-        key="download_general_metrics_v020",
+        key="download_general_metrics_v021",
     )
 
     st.download_button(
@@ -651,13 +714,13 @@ with tab_export:
         data=ring_metrics_df.to_csv(index=False).encode("utf-8"),
         file_name="metricas_ringdown_resonancia.csv",
         mime="text/csv",
-        key="download_ring_metrics_v020",
+        key="download_ring_metrics_v021",
     )
 
     export_name = st.selectbox(
         "Exportar forma de onda",
         [item["name"] for item in waveforms],
-        key="export_waveform_select_v020",
+        key="export_waveform_select_v021",
     )
     export_item = next(item for item in waveforms if item["name"] == export_name)
 
@@ -666,14 +729,17 @@ with tab_export:
         data=waveform_csv_bytes(export_item),
         file_name=Path(export_name).with_suffix(".csv").name,
         mime="text/csv",
-        key="download_waveform_csv_v020",
+        key="download_waveform_csv_v021",
     )
 
 with tab_header:
+    st.subheader("Cabeçalho")
+    st.caption("Metadados extraídos do arquivo ISF e cabeçalho bruto do Tektronix.")
+
     selected_header_name = st.selectbox(
         "Selecione o arquivo",
         [item["name"] for item in waveforms],
-        key="header_select_v020",
+        key="header_select_v021",
     )
     header_item = next(item for item in waveforms if item["name"] == selected_header_name)
 
@@ -685,5 +751,5 @@ with tab_header:
         "Cabeçalho",
         header_item["header"],
         height=350,
-        key="raw_header_text_v020",
+        key="raw_header_text_v021",
     )

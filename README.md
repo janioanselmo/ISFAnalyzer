@@ -97,3 +97,12 @@ Add resonance ringdown and before-after waveform analysis
 - Ajuste a janela de ringing para capturar apenas a oscilação natural, evitando incluir o pulso principal quando possível.
 - Para comparar antes/depois, use a mesma janela de ringing, mesmo gap, mesma configuração de probe e mesma escala do osciloscópio.
 - A energia resistiva depende do valor de carga equivalente informado. Para análise real com amostra biológica, prefira medir tensão e corrente simultaneamente.
+
+
+## v0.2.1 — Interface simplificada
+
+A interface agora possui apenas três abas principais:
+
+1. **Análise de sinais** — concentra sinal único, múltiplos sinais, ressonância/ringing, antes × depois e V × I / potência.
+2. **Exportação** — concentra os downloads CSV.
+3. **Cabeçalho** — concentra metadados e cabeçalho bruto ISF.

@@ -1,5 +1,11 @@
 # Changelog
 
+## v0.2.1 — Signal analysis tabs
+
+- Reduced top-level interface to three tabs: Signal Analysis, Export, and Header.
+- Moved single-signal, multi-signal, ringdown, before-after, and V-I/power tools into a single Signal Analysis operation selector.
+- Updated widget keys to avoid Streamlit duplicate element IDs after the UI consolidation.
+
 ## v0.2.0-resonance
 
 Suggested commit name:
