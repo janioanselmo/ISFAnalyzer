@@ -15,7 +15,7 @@ On Windows, you can also run:
 run_windows.bat
 ```
 
-## v0.3.1 usability notes
+## v0.3.2 usability notes
 
 The **Envelope** operation now uses mouse-based peak selection only:
 
@@ -25,8 +25,16 @@ The **Envelope** operation now uses mouse-based peak selection only:
 4. The number of peaks is defined by the selected points; there is no manual `N` field.
 5. The exponential envelope is fitted automatically when at least two peaks are selected.
 
-If two files are selected, the app shows two peak-selection graphs side by side and then overlays the fitted envelopes for comparison.
+If multiple files are selected, the app shows all waveforms on the same axis. Each file keeps its own peak selections and the fitted envelopes are overlaid for comparison.
 
+
+## v0.3.2
+
+- Multi-file envelope selection on a single shared axis.
+- One click image selector for 1 to 4 waveforms.
+- Per-file peak selection state and exponential fit.
+- Faster click response by reducing the image selector draw load.
+- Export metrics are now generated on demand to avoid slowing down Envelope clicks.
 
 ## v0.3.1
 
