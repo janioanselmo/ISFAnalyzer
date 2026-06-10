@@ -37,7 +37,7 @@ st.set_page_config(
 )
 
 
-APP_VERSION = "0.2.7-mouse-peak-selection"
+APP_VERSION = "0.2.8-click-toggle-selection"
 
 
 def _format_metric(value: float, unit: str = "", precision: int = 4) -> str:
@@ -655,11 +655,11 @@ def _state_suffix(name: str) -> str:
 
 
 def _peak_selection_key(file_name: str) -> str:
-    return f"envelope_selected_peak_ids_{_state_suffix(file_name)}_v027"
+    return f"envelope_selected_peak_ids_{_state_suffix(file_name)}_v028"
 
 
 def _last_click_key(file_name: str) -> str:
-    return f"envelope_last_click_signature_{_state_suffix(file_name)}_v027"
+    return f"envelope_last_click_signature_{_state_suffix(file_name)}_v028"
 
 
 def selected_peak_ids_for_file(file_name: str) -> list[int]:
@@ -1029,7 +1029,7 @@ with tab_signal:
         "Operação",
         ["Sinais", "Envelope", "Comparação", "Potência"],
         horizontal=True,
-        key="signal_analysis_mode_v027",
+        key="signal_analysis_mode_v028",
         help=(
             "Sinais: visualizar curvas e métricas gerais. Envelope: selecionar picos por clique e ajustar decaimento. "
             "Comparação: antes/depois. Potência: análise V × I."
@@ -1114,7 +1114,7 @@ with tab_signal:
     elif analysis_mode == "Envelope":
         st.subheader("Envelope")
         st.caption(
-            "Selecione os picos diretamente com o mouse. O número N é definido pela sua seleção: "
+            "Clique uma vez nos marcadores dos picos para selecionar ou desmarcar. O número N é definido pela sua seleção: "
             "2, 3, 4 ou mais picos. Para cada arquivo escolhido, aparece um gráfico de seleção "
             "e, logo abaixo, a envoltória exponencial calculada."
         )
@@ -1126,7 +1126,7 @@ with tab_signal:
             "Arquivos para análise de envelope",
             file_names,
             default=default_files,
-            key="envelope_files_v027",
+            key="envelope_files_v028",
             help="Se escolher um arquivo, aparece um conjunto de gráficos. Se escolher dois, aparecem dois conjuntos para comparação.",
         )
 
@@ -1136,14 +1136,14 @@ with tab_signal:
             value=ring_start_us,
             step=1.0,
             format="%.3f",
-            key="envelope_start_us_v027",
+            key="envelope_start_us_v028",
         )
         env_end_us = control_cols[1].number_input(
             "Fim (µs)",
             value=ring_end_us,
             step=1.0,
             format="%.3f",
-            key="envelope_end_us_v027",
+            key="envelope_end_us_v028",
         )
         env_threshold = control_cols[2].slider(
             "Limiar dos picos (%)",
@@ -1151,7 +1151,7 @@ with tab_signal:
             max_value=50,
             value=int(round(peak_threshold_fraction * 100)),
             step=1,
-            key="envelope_threshold_v027",
+            key="envelope_threshold_v028",
         ) / 100.0
         env_min_distance = control_cols[3].number_input(
             "Distância mínima (µs)",
@@ -1159,25 +1159,25 @@ with tab_signal:
             value=min_peak_distance_us,
             step=0.5,
             format="%.3f",
-            key="envelope_min_distance_v027",
+            key="envelope_min_distance_v028",
         )
         polarity = control_cols[4].selectbox(
             "Tipo de pico",
             ["Extremos positivos e negativos", "Somente positivos", "Somente negativos"],
-            key="envelope_polarity_v027",
+            key="envelope_polarity_v028",
         )
 
         option_cols = st.columns([1, 1, 3])
         focus_y = option_cols[0].checkbox(
             "Zoom nos picos",
             value=True,
-            key="envelope_focus_y_v027",
+            key="envelope_focus_y_v028",
             help="Ignora o pulso principal na escala vertical quando ele é muito maior que o ringing.",
         )
         log_y_fit = option_cols[1].checkbox(
             "Envelope em log",
             value=False,
-            key="envelope_log_y_v027",
+            key="envelope_log_y_v028",
         )
         option_cols[2].info(
             "Dica: no gráfico de seleção, use o mouse nos marcadores dos picos. "
@@ -1217,24 +1217,69 @@ with tab_signal:
                 if not peak_df.empty:
                     peak_df["peak_id"] = np.arange(len(peak_df), dtype=int)
 
+                selected_state_key = _peak_selection_key(ring_item["name"])
+                last_click_state_key = _last_click_key(ring_item["name"])
+                selected_ids = selected_peak_ids_for_file(ring_item["name"])
+
+                action_cols = st.columns([1, 1, 4])
+                if action_cols[0].button(
+                    "Limpar seleção",
+                    key=f"clear_peak_selection_{_state_suffix(ring_item['name'])}_v028",
+                ):
+                    set_selected_peak_ids_for_file(ring_item["name"], [])
+                    st.session_state[last_click_state_key] = None
+                    st.rerun()
+
+                action_cols[1].caption(f"Selecionados: {len(selected_ids)}")
+                action_cols[2].caption(
+                    "Clique uma vez no marcador do pico. Cada clique alterna entre selecionado/desmarcado."
+                )
+
                 fig_click = plot_peak_selection_graph(
                     ring_item,
                     peak_df,
-                    selected_peak_ids=[],
+                    selected_peak_ids=selected_ids,
                     start_us=env_start_us,
                     end_us=env_end_us,
                     baseline_mode=baseline_mode,
                     max_points=max_plot_points,
                     focus_y_on_peaks=focus_y,
                 )
-                selection_state = st.plotly_chart(
-                    fig_click,
-                    use_container_width=True,
-                    key=f"envelope_native_select_{_state_suffix(ring_item['name'])}_v027",
-                    on_select="rerun",
-                    selection_mode=("points", "box", "lasso"),
-                )
-                selected_ids = extract_selected_peak_ids(selection_state)
+
+                if plotly_events is None:
+                    st.error(
+                        "O componente de clique não está instalado. Rode: "
+                        "pip install streamlit-plotly-events"
+                    )
+                    st.plotly_chart(
+                        fig_click,
+                        use_container_width=True,
+                        key=f"envelope_static_select_{_state_suffix(ring_item['name'])}_v028",
+                    )
+                else:
+                    clicked_points = plotly_events(
+                        fig_click,
+                        click_event=True,
+                        hover_event=False,
+                        select_event=False,
+                        override_height=520,
+                        override_width="100%",
+                        key=f"envelope_click_toggle_{_state_suffix(ring_item['name'])}_v028",
+                    )
+                    changed = toggle_peak_selection_from_clicks(
+                        clicked_points,
+                        peak_df,
+                        selected_state_key=selected_state_key,
+                        last_click_state_key=last_click_state_key,
+                    )
+                    if changed:
+                        st.rerun()
+
+                selected_ids = selected_peak_ids_for_file(ring_item["name"])
+                valid_ids = set(peak_df["peak_id"].to_list()) if not peak_df.empty else set()
+                selected_ids = [peak_id for peak_id in selected_ids if peak_id in valid_ids]
+                if selected_ids != selected_peak_ids_for_file(ring_item["name"]):
+                    set_selected_peak_ids_for_file(ring_item["name"], selected_ids)
 
                 st.caption(
                     f"{len(peak_df)} picos detectados | {len(selected_ids)} selecionado(s) pelo mouse."
@@ -1254,7 +1299,7 @@ with tab_signal:
                 st.plotly_chart(
                     fig_fit,
                     use_container_width=True,
-                    key=f"envelope_fit_{_state_suffix(ring_item['name'])}_v027",
+                    key=f"envelope_fit_{_state_suffix(ring_item['name'])}_v028",
                 )
 
                 metric_cols = st.columns(4)
@@ -1290,21 +1335,21 @@ with tab_signal:
             normalize_env = compare_cols[0].checkbox(
                 "Normalizar",
                 value=True,
-                key="envelope_compare_norm_v027",
+                key="envelope_compare_norm_v028",
             )
             compare_cols[1].caption(
                 "A sobreposição compara o decaimento relativo das curvas selecionadas manualmente."
             )
             envelope_df = pd.DataFrame(envelope_rows)
             fig_cmp = plot_envelope_comparison(envelope_df, normalize=normalize_env)
-            st.plotly_chart(fig_cmp, use_container_width=True, key="envelope_compare_chart_v027")
+            st.plotly_chart(fig_cmp, use_container_width=True, key="envelope_compare_chart_v028")
             st.dataframe(compact_metrics_table(envelope_rows), use_container_width=True)
             st.download_button(
                 "Baixar comparação de envelopes em CSV",
                 data=envelope_df.to_csv(index=False).encode("utf-8"),
                 file_name="comparacao_envelopes_exponenciais.csv",
                 mime="text/csv",
-                key="download_envelope_compare_v027",
+                key="download_envelope_compare_v028",
             )
 
     elif analysis_mode == "Comparação":

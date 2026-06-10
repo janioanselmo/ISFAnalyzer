@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.2.8 - Click toggle selection
+
+- Added click-toggle selection for ringdown peaks.
+- Removed reliance on Streamlit native box/lasso selection for the envelope workflow.
+- Added explicit selection counter and clear button per file.
+- Kept one selection graph and one fitted-envelope graph per selected ISF file.
+
+# Changelog
+
 ## v0.2.7 - Mouse peak selection
 
 - Reworked the Envelope workflow to remove the confusing `N`-based selection.

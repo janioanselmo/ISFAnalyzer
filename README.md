@@ -15,7 +15,7 @@ On Windows, you can also run:
 run_windows.bat
 ```
 
-## v0.2.7 usability notes
+## v0.2.8 usability notes
 
 The **Envelope** operation now uses mouse-based peak selection only:
 
@@ -26,3 +26,11 @@ The **Envelope** operation now uses mouse-based peak selection only:
 5. The exponential envelope is fitted automatically when at least two peaks are selected.
 
 If two files are selected, the app shows two peak-selection graphs side by side and then overlays the fitted envelopes for comparison.
+
+
+## v0.2.8
+
+- Click-toggle peak selection for envelope fitting.
+- One graph per selected ISF file in Envelope mode.
+- Automatic envelope comparison after at least two files have valid selected peaks.
+

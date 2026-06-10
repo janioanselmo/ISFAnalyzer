@@ -2,3 +2,5 @@ streamlit>=1.36
 numpy>=1.24
 pandas>=2.0
 plotly>=5.20
+
+streamlit-plotly-events>=0.0.6
