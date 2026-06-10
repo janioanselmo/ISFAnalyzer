@@ -31,7 +31,7 @@ st.set_page_config(
 )
 
 
-APP_VERSION = "0.2.1-signal-tabs"
+APP_VERSION = "0.2.2-envelope-analysis"
 
 
 def _format_metric(value: float, unit: str = "", precision: int = 4) -> str:
@@ -201,6 +201,295 @@ def vip_csv_bytes(t: np.ndarray, v: np.ndarray, i: np.ndarray, p: np.ndarray) ->
     return df.to_csv(index=False).encode("utf-8")
 
 
+
+
+def _get_selection_points(selection_state) -> list[dict]:
+    """Return Plotly selected points from Streamlit selection state."""
+    if selection_state is None:
+        return []
+
+    selection = getattr(selection_state, "selection", None)
+    if selection is None and isinstance(selection_state, dict):
+        selection = selection_state.get("selection")
+    if selection is None:
+        return []
+
+    points = getattr(selection, "points", None)
+    if points is None and isinstance(selection, dict):
+        points = selection.get("points", [])
+    return list(points or [])
+
+
+def extract_selected_peak_ids(selection_state) -> list[int]:
+    """Extract peak identifiers from marker customdata after mouse selection."""
+    selected_ids: list[int] = []
+    for point in _get_selection_points(selection_state):
+        custom = None
+        if isinstance(point, dict):
+            custom = point.get("customdata")
+        else:
+            custom = getattr(point, "customdata", None)
+
+        if isinstance(custom, (list, tuple, np.ndarray)) and len(custom):
+            custom = custom[0]
+
+        try:
+            selected_ids.append(int(custom))
+        except (TypeError, ValueError):
+            continue
+
+    return sorted(set(selected_ids))
+
+
+def filter_peak_table_by_polarity(peak_df: pd.DataFrame, polarity: str) -> pd.DataFrame:
+    """Filter peak table according to selected polarity."""
+    if peak_df.empty:
+        return peak_df.copy()
+    if polarity == "Somente positivos":
+        return peak_df[peak_df["tipo"] == "positivo"].copy()
+    if polarity == "Somente negativos":
+        return peak_df[peak_df["tipo"] == "negativo"].copy()
+    return peak_df.copy()
+
+
+def fit_exponential_envelope(
+    peak_df: pd.DataFrame,
+    n_peaks: int = 3,
+    polarity: str = "Extremos positivos e negativos",
+    selected_peak_ids: list[int] | None = None,
+    file_name: str = "",
+) -> tuple[dict, pd.DataFrame]:
+    """Fit |V_peak| = A0 * exp(-(t - t0) / tau) from selected or last peaks."""
+    empty_metrics = {
+        "arquivo": file_name,
+        "metodo": "sem picos suficientes",
+        "n_picos_fit": 0,
+        "t0_us": float("nan"),
+        "ultimo_pico_us": float("nan"),
+        "a0": float("nan"),
+        "tau_us": float("nan"),
+        "slope_1_s": float("nan"),
+        "r2_envelope": float("nan"),
+        "periodo_mediano_us": float("nan"),
+        "freq_envelope_khz": float("nan"),
+        "decaimento_por_periodo_percent": float("nan"),
+        "meia_vida_us": float("nan"),
+        "amplitude_final_predita": float("nan"),
+        "razao_final_inicial_predita": float("nan"),
+    }
+
+    if peak_df.empty:
+        return empty_metrics, peak_df.copy()
+
+    peaks = filter_peak_table_by_polarity(peak_df, polarity)
+    if peaks.empty:
+        return empty_metrics, peaks
+
+    if selected_peak_ids:
+        fit_df = peak_df[peak_df["peak_id"].isin(selected_peak_ids)].copy()
+        fit_df = filter_peak_table_by_polarity(fit_df, polarity)
+        method = "seleção manual no gráfico"
+    else:
+        fit_df = peaks.sort_values("tempo_us").tail(n_peaks).copy()
+        method = f"últimos {n_peaks} picos detectados"
+
+    fit_df = fit_df.sort_values("tempo_us").reset_index(drop=True)
+    fit_df["abs_amplitude"] = np.abs(fit_df["amplitude"].astype(float))
+    fit_df = fit_df[np.isfinite(fit_df["tempo_us"]) & (fit_df["abs_amplitude"] > 0)]
+
+    if len(fit_df) < 2:
+        metrics = empty_metrics.copy()
+        metrics["arquivo"] = file_name
+        metrics["metodo"] = method
+        metrics["n_picos_fit"] = int(len(fit_df))
+        return metrics, fit_df
+
+    t_us = fit_df["tempo_us"].to_numpy(dtype=float)
+    amp = fit_df["abs_amplitude"].to_numpy(dtype=float)
+    t0_us = float(t_us[0])
+    x_s = (t_us - t0_us) * 1e-6
+    log_amp = np.log(amp)
+
+    slope, intercept = np.polyfit(x_s, log_amp, deg=1)
+    pred_log = slope * x_s + intercept
+    ss_res = float(np.sum((log_amp - pred_log) ** 2))
+    ss_tot = float(np.sum((log_amp - np.mean(log_amp)) ** 2))
+    r2 = float(1.0 - ss_res / ss_tot) if ss_tot > 0 else float("nan")
+    tau_s = float(-1.0 / slope) if slope < 0 else float("nan")
+    tau_us = float(tau_s * 1e6) if np.isfinite(tau_s) else float("nan")
+    a0 = float(np.exp(intercept))
+
+    periods_us = np.diff(t_us)
+    periods_us = periods_us[periods_us > 0]
+    median_period_us = float(np.median(periods_us)) if len(periods_us) else float("nan")
+    freq_khz = float(1e3 / median_period_us) if np.isfinite(median_period_us) and median_period_us > 0 else float("nan")
+
+    if np.isfinite(tau_us) and np.isfinite(median_period_us):
+        decay_per_period = float(100.0 * (1.0 - np.exp(-median_period_us / tau_us)))
+    else:
+        decay_per_period = float("nan")
+
+    half_life_us = float(tau_us * np.log(2.0)) if np.isfinite(tau_us) else float("nan")
+    last_x_s = float(x_s[-1])
+    final_amp = float(a0 * np.exp(slope * last_x_s))
+    ratio_final_initial = float(final_amp / a0) if a0 > 0 else float("nan")
+
+    fit_df["amp_envelope_fit"] = np.exp(pred_log)
+    fit_df["residuo_log"] = log_amp - pred_log
+
+    return {
+        "arquivo": file_name,
+        "metodo": method,
+        "n_picos_fit": int(len(fit_df)),
+        "t0_us": t0_us,
+        "ultimo_pico_us": float(t_us[-1]),
+        "a0": a0,
+        "tau_us": tau_us,
+        "slope_1_s": float(slope),
+        "r2_envelope": r2,
+        "periodo_mediano_us": median_period_us,
+        "freq_envelope_khz": freq_khz,
+        "decaimento_por_periodo_percent": decay_per_period,
+        "meia_vida_us": half_life_us,
+        "amplitude_final_predita": final_amp,
+        "razao_final_inicial_predita": ratio_final_initial,
+    }, fit_df
+
+
+def add_peak_ids(peak_df: pd.DataFrame) -> pd.DataFrame:
+    """Add stable peak identifiers for Plotly selection."""
+    peak_df = peak_df.copy()
+    if not peak_df.empty:
+        peak_df = peak_df.sort_values("tempo_us").reset_index(drop=True)
+        peak_df["peak_id"] = np.arange(len(peak_df), dtype=int)
+    else:
+        peak_df["peak_id"] = []
+    return peak_df
+
+
+def plot_ringdown_with_envelope(
+    item: dict,
+    peak_df: pd.DataFrame,
+    fit_df: pd.DataFrame,
+    envelope: dict,
+    start_us: float,
+    end_us: float,
+    baseline_mode: str,
+    max_points: int,
+):
+    """Plot ringdown, selectable peaks and fitted exponential envelope."""
+    t = item["time_s"]
+    y, _baseline = subtract_baseline(t, item["value"], mode=baseline_mode)
+    t_win, y_win, _indices = slice_window_us(t, y, start_us, end_us)
+
+    fig = go.Figure()
+    if len(t_win):
+        t_plot, y_plot = decimate_for_plot(t_win, y_win, max_points=max_points)
+        fig.add_trace(
+            go.Scattergl(
+                x=t_plot * 1e6,
+                y=y_plot,
+                mode="lines",
+                name="sinal corrigido",
+            )
+        )
+
+    if not peak_df.empty:
+        fig.add_trace(
+            go.Scatter(
+                x=peak_df["tempo_us"],
+                y=peak_df["amplitude"],
+                mode="markers",
+                name="picos selecionáveis",
+                customdata=peak_df[["peak_id"]],
+                marker=dict(size=9),
+            )
+        )
+
+    if not fit_df.empty:
+        fig.add_trace(
+            go.Scatter(
+                x=fit_df["tempo_us"],
+                y=fit_df["amplitude"],
+                mode="markers",
+                name="picos usados no ajuste",
+                marker=dict(size=14, symbol="diamond-open"),
+            )
+        )
+
+    if np.isfinite(envelope.get("tau_us", np.nan)) and np.isfinite(envelope.get("a0", np.nan)):
+        t0_us = envelope["t0_us"]
+        tau_us = envelope["tau_us"]
+        a0 = envelope["a0"]
+        x_env_us = np.linspace(t0_us, end_us, 500)
+        amp_env = a0 * np.exp(-(x_env_us - t0_us) / tau_us)
+        fig.add_trace(
+            go.Scatter(
+                x=x_env_us,
+                y=amp_env,
+                mode="lines",
+                name="envoltória +A·e⁻ᵗ/τ",
+                line=dict(dash="dash"),
+            )
+        )
+        fig.add_trace(
+            go.Scatter(
+                x=x_env_us,
+                y=-amp_env,
+                mode="lines",
+                name="envoltória -A·e⁻ᵗ/τ",
+                line=dict(dash="dash"),
+            )
+        )
+
+    fig.update_layout(
+        height=580,
+        xaxis_title="Tempo (µs)",
+        yaxis_title="Amplitude corrigida",
+        hovermode="closest",
+        dragmode="select",
+        margin=dict(l=40, r=20, t=40, b=40),
+    )
+    fig.update_xaxes(showgrid=True)
+    fig.update_yaxes(showgrid=True)
+    return fig
+
+
+def plot_envelope_comparison(envelope_df: pd.DataFrame, normalize: bool = True):
+    """Compare fitted exponential envelopes from multiple loaded files."""
+    fig = go.Figure()
+    if envelope_df.empty:
+        return fig
+
+    for _, row in envelope_df.iterrows():
+        if not np.isfinite(row.get("tau_us", np.nan)) or not np.isfinite(row.get("a0", np.nan)):
+            continue
+        duration = row.get("ultimo_pico_us", np.nan) - row.get("t0_us", np.nan)
+        if not np.isfinite(duration) or duration <= 0:
+            duration = row["tau_us"] * 3.0
+        x_us = np.linspace(0.0, duration, 500)
+        y = np.exp(-x_us / row["tau_us"]) if normalize else row["a0"] * np.exp(-x_us / row["tau_us"])
+        fig.add_trace(
+            go.Scatter(
+                x=x_us,
+                y=y,
+                mode="lines",
+                name=str(row["arquivo"]),
+            )
+        )
+
+    fig.update_layout(
+        height=520,
+        xaxis_title="Tempo relativo ao primeiro pico usado no ajuste (µs)",
+        yaxis_title="Amplitude normalizada" if normalize else "Amplitude da envoltória",
+        hovermode="x unified",
+        margin=dict(l=40, r=20, t=40, b=40),
+    )
+    fig.update_xaxes(showgrid=True)
+    fig.update_yaxes(showgrid=True)
+    return fig
+
+
 st.title("⚡ ENSA ISF Analyzer")
 st.caption(
     f"Mini-IDE para Tektronix .ISF | versão {APP_VERSION} | foco: pulso, ringing, ressonância e eletroporação"
@@ -349,7 +638,7 @@ tab_signal, tab_export, tab_header = st.tabs(
 with tab_signal:
     st.subheader("Análise de sinais")
     st.caption(
-        "Área única para sinal individual, múltiplos sinais, ressonância/ringing, "
+        "Área única para visualização, métricas gerais, ringdown, envoltória exponencial, "
         "comparação antes × depois e análise V × I / potência."
     )
 
@@ -365,25 +654,94 @@ with tab_signal:
     analysis_mode = st.radio(
         "Escolha a operação",
         [
-            "Sinal único",
-            "Múltiplos sinais",
-            "Ressonância / ringing",
+            "Visão geral / formas de onda",
+            "Ressonância e envoltória",
             "Antes × depois",
             "V × I / potência",
         ],
         horizontal=True,
-        key="signal_analysis_mode_v021",
+        key="signal_analysis_mode_v022",
     )
 
-    if analysis_mode == "Sinal único":
-        selected_name = st.selectbox(
-            "Selecione o sinal",
+    if analysis_mode == "Visão geral / formas de onda":
+        st.subheader("Visualização e métricas")
+        col_a, col_b, col_c = st.columns(3)
+        selected_names = col_a.multiselect(
+            "Sinais para plotar",
             [item["name"] for item in waveforms],
-            key="single_select_signal_v021",
+            default=[item["name"] for item in waveforms[: min(4, len(waveforms))]],
+            key="overview_selected_signals_v022",
         )
-        selected = next(item for item in waveforms if item["name"] == selected_name)
-        selected_metrics = next(row for row in metrics if row["arquivo"] == selected_name)
+        normalize = col_b.checkbox(
+            "Normalizar pelo pico absoluto",
+            value=False,
+            key="overview_normalize_v022",
+        )
+        corrected_overview = col_c.checkbox(
+            "Subtrair linha de base",
+            value=False,
+            key="overview_corrected_v022",
+        )
 
+        col_d, col_e = st.columns(2)
+        use_custom_window = col_d.checkbox(
+            "Limitar janela temporal",
+            value=False,
+            key="overview_window_enable_v022",
+        )
+        use_ring_window = col_e.checkbox(
+            "Usar janela de ringing",
+            value=False,
+            key="overview_ring_window_v022",
+            disabled=not use_custom_window,
+        )
+
+        if use_custom_window and not use_ring_window:
+            win_cols = st.columns(2)
+            overview_start_us = win_cols[0].number_input(
+                "Início da janela de visualização (µs)",
+                value=ring_start_us,
+                step=1.0,
+                key="overview_start_us_v022",
+            )
+            overview_end_us = win_cols[1].number_input(
+                "Fim da janela de visualização (µs)",
+                value=ring_end_us,
+                step=1.0,
+                key="overview_end_us_v022",
+            )
+        elif use_custom_window and use_ring_window:
+            overview_start_us = ring_start_us
+            overview_end_us = ring_end_us
+        else:
+            overview_start_us = None
+            overview_end_us = None
+
+        selected_waveforms = [item for item in waveforms if item["name"] in selected_names]
+        if not selected_waveforms:
+            st.warning("Selecione pelo menos um sinal para plotar.")
+        else:
+            fig = plot_waveforms(
+                selected_waveforms,
+                normalize=normalize,
+                corrected=corrected_overview,
+                baseline_mode=baseline_mode,
+                max_points=max_plot_points,
+                start_us=overview_start_us,
+                end_us=overview_end_us,
+            )
+            st.plotly_chart(
+                fig,
+                use_container_width=True,
+                key="overview_waveform_chart_v022",
+            )
+
+        selected_metric_name = st.selectbox(
+            "Sinal para resumo individual",
+            [item["name"] for item in waveforms],
+            key="overview_metric_signal_v022",
+        )
+        selected_metrics = next(row for row in metrics if row["arquivo"] == selected_metric_name)
         cols = st.columns(5)
         cols[0].metric("Vmax", _format_metric(selected_metrics["v_max"], "V"))
         cols[1].metric("Vmin", _format_metric(selected_metrics["v_min"], "V"))
@@ -391,117 +749,171 @@ with tab_signal:
         cols[3].metric("Campo", _format_metric(selected_metrics["campo_kv_cm"], "kV/cm"))
         cols[4].metric("Freq. FFT", _format_metric(selected_metrics["freq_fft_khz"], "kHz"))
 
-        cols = st.columns(5)
-        cols[0].metric("Pulso início", _format_metric(selected_metrics["pulso_inicio_us"], "µs"))
-        cols[1].metric("Pulso fim", _format_metric(selected_metrics["pulso_fim_us"], "µs"))
-        cols[2].metric("Largura", _format_metric(selected_metrics["largura_pulso_us"], "µs"))
-        cols[3].metric("Energia aprox.", _format_metric(selected_metrics["energia_resistiva_j"], "J"))
-        cols[4].metric("RMS", _format_metric(selected_metrics["rms_corrigido"], "V"))
+        with st.expander("Tabelas comparativas", expanded=True):
+            tab_metrics_a, tab_metrics_b = st.tabs(["Métricas gerais", "Métricas de ringing"])
+            with tab_metrics_a:
+                st.dataframe(metrics_df, use_container_width=True)
+            with tab_metrics_b:
+                st.dataframe(ring_metrics_df, use_container_width=True)
 
-        corrected = st.checkbox(
-            "Subtrair linha de base no gráfico",
-            value=False,
-            key="single_corrected_v021",
-        )
-        fig = plot_waveforms(
-            [selected],
-            corrected=corrected,
-            baseline_mode=baseline_mode,
-            max_points=max_plot_points,
-        )
-        st.plotly_chart(fig, use_container_width=True, key="single_waveform_chart_v021")
-
-        st.subheader("Métricas completas")
-        st.dataframe(
-            pd.DataFrame([selected_metrics]).T.rename(columns={0: "valor"}),
-            use_container_width=True,
+    elif analysis_mode == "Ressonância e envoltória":
+        st.subheader("Ringdown, picos finais e envoltória exponencial")
+        st.caption(
+            "Selecione os picos com box/lasso no gráfico. Se nada for selecionado, "
+            "o app usa automaticamente os últimos N picos detectados na janela de ringing."
         )
 
-    elif analysis_mode == "Múltiplos sinais":
-        st.subheader("Comparação de formas de onda")
-        col_a, col_b, col_c = st.columns(3)
-        normalize = col_a.checkbox(
-            "Normalizar pelo pico absoluto",
-            value=False,
-            key="multi_normalize_v021",
-        )
-        corrected_multi = col_b.checkbox(
-            "Subtrair linha de base",
-            value=False,
-            key="multi_corrected_v021",
-        )
-        only_ring_window = col_c.checkbox(
-            "Mostrar só janela de ringing",
-            value=False,
-            key="multi_only_ring_v021",
-        )
-
-        fig = plot_waveforms(
-            waveforms,
-            normalize=normalize,
-            corrected=corrected_multi,
-            baseline_mode=baseline_mode,
-            max_points=max_plot_points,
-            start_us=ring_start_us if only_ring_window else None,
-            end_us=ring_end_us if only_ring_window else None,
-        )
-        st.plotly_chart(
-            fig,
-            use_container_width=True,
-            key="multi_waveform_comparison_chart_v021",
-        )
-
-        st.subheader("Tabela comparativa geral")
-        st.dataframe(metrics_df, use_container_width=True)
-
-        st.subheader("Tabela comparativa de ringing")
-        st.dataframe(ring_metrics_df, use_container_width=True)
-
-    elif analysis_mode == "Ressonância / ringing":
-        st.subheader("Análise da oscilação natural / ringdown")
-        ring_name = st.selectbox(
-            "Selecione o sinal para ringing",
+        control_cols = st.columns(4)
+        ring_name = control_cols[0].selectbox(
+            "Sinal para análise",
             [item["name"] for item in waveforms],
-            key="ring_select_signal_v021",
+            key="envelope_select_signal_v022",
         )
+        n_fit_peaks = control_cols[1].number_input(
+            "N picos para ajuste",
+            min_value=2,
+            max_value=12,
+            value=3,
+            step=1,
+            key="envelope_n_peaks_v022",
+            help="Use 3 para o teste inicial; aumente para robustez estatística quando houver mais picos limpos.",
+        )
+        polarity = control_cols[2].selectbox(
+            "Picos usados",
+            ["Extremos positivos e negativos", "Somente positivos", "Somente negativos"],
+            key="envelope_polarity_v022",
+        )
+        normalize_env = control_cols[3].checkbox(
+            "Comparar envoltórias normalizadas",
+            value=True,
+            key="envelope_normalized_compare_v022",
+        )
+
+        previous_ring_name = st.session_state.get("envelope_selected_signal_name_v022")
+        if previous_ring_name != ring_name:
+            st.session_state["envelope_selected_signal_name_v022"] = ring_name
+            st.session_state["envelope_selected_peak_ids_v022"] = []
+
         ring_item = next(item for item in waveforms if item["name"] == ring_name)
-        ring_row = next(row for row in ring_metrics if row["arquivo"] == ring_name)
+        peak_df = add_peak_ids(
+            ringdown_peak_table(
+                ring_item["time_s"],
+                ring_item["value"],
+                start_us=ring_start_us,
+                end_us=ring_end_us,
+                baseline_mode=baseline_mode,
+                peak_threshold_fraction=peak_threshold_fraction,
+                min_peak_distance_us=min_peak_distance_us,
+            )
+        )
 
-        cols = st.columns(6)
-        cols[0].metric("Período", _format_metric(ring_row["period_peaks_us"], "µs"))
-        cols[1].metric("Freq. amortecida", _format_metric(ring_row["freq_damped_khz"], "kHz"))
-        cols[2].metric("τ envelope", _format_metric(ring_row["tau_envelope_us"], "µs"))
-        cols[3].metric("ζ", _format_metric(ring_row["damping_ratio_zeta"], ""))
-        cols[4].metric("Q", _format_metric(ring_row["quality_factor_q"], ""))
-        cols[5].metric("Energia ringing", _format_metric(ring_row["ring_energy_resistive_j"], "J"))
-
-        cols = st.columns(5)
-        cols[0].metric("Decremento log.", _format_metric(ring_row["log_decrement"], ""))
-        cols[1].metric("Decaimento/ciclo", _format_metric(ring_row["decay_per_cycle_percent"], "%"))
-        cols[2].metric("R² envelope", _format_metric(ring_row["envelope_r2"], ""))
-        cols[3].metric("Picos detectados", _format_metric(ring_row["n_extrema"], "", precision=0))
-        cols[4].metric("Assimetria +/−", _format_metric(ring_row["asymmetry_pos_neg"], ""))
-
-        fig_ring, peak_df = plot_ringdown(
+        placeholder_env, placeholder_table = st.columns([2, 1])
+        selected_ids = st.session_state.get("envelope_selected_peak_ids_v022", [])
+        envelope_metrics, fit_df = fit_exponential_envelope(
+            peak_df,
+            n_peaks=int(n_fit_peaks),
+            polarity=polarity,
+            selected_peak_ids=selected_ids,
+            file_name=ring_name,
+        )
+        fig_env = plot_ringdown_with_envelope(
             ring_item,
+            peak_df,
+            fit_df,
+            envelope_metrics,
             start_us=ring_start_us,
             end_us=ring_end_us,
             baseline_mode=baseline_mode,
-            peak_threshold_fraction=peak_threshold_fraction,
-            min_peak_distance_us=min_peak_distance_us,
             max_points=max_plot_points,
         )
-        st.plotly_chart(fig_ring, use_container_width=True, key="ringdown_chart_v021")
+        selection_state = placeholder_env.plotly_chart(
+            fig_env,
+            use_container_width=True,
+            key="envelope_selectable_chart_v022",
+            on_select="rerun",
+            selection_mode=("box", "lasso"),
+        )
+        new_selected_ids = extract_selected_peak_ids(selection_state)
+        if new_selected_ids != selected_ids:
+            st.session_state["envelope_selected_peak_ids_v022"] = new_selected_ids
+            st.rerun()
 
-        col_table_a, col_table_b = st.columns(2)
-        with col_table_a:
-            st.subheader("Métricas de ringing")
+        with placeholder_table:
+            st.markdown("**Picos selecionados**")
+            if selected_ids:
+                st.success(f"{len(selected_ids)} pico(s) selecionado(s) com o mouse.")
+                if st.button("Limpar seleção", key="clear_envelope_selection_v022"):
+                    st.session_state["envelope_selected_peak_ids_v022"] = []
+                    st.rerun()
+            else:
+                st.info(f"Sem seleção manual: usando últimos {int(n_fit_peaks)} picos.")
             st.dataframe(
-                pd.DataFrame([ring_row]).T.rename(columns={0: "valor"}),
+                fit_df[["tempo_us", "tipo", "amplitude", "abs_amplitude"]]
+                if not fit_df.empty
+                else fit_df,
                 use_container_width=True,
+                height=250,
             )
-        with col_table_b:
-            st.subheader("Picos detectados")
+
+        cols = st.columns(6)
+        cols[0].metric("τ envelope", _format_metric(envelope_metrics["tau_us"], "µs"))
+        cols[1].metric("R² envelope", _format_metric(envelope_metrics["r2_envelope"], ""))
+        cols[2].metric("Período mediano", _format_metric(envelope_metrics["periodo_mediano_us"], "µs"))
+        cols[3].metric("Freq.", _format_metric(envelope_metrics["freq_envelope_khz"], "kHz"))
+        cols[4].metric("Decaimento/ciclo", _format_metric(envelope_metrics["decaimento_por_periodo_percent"], "%"))
+        cols[5].metric("Meia-vida", _format_metric(envelope_metrics["meia_vida_us"], "µs"))
+
+        st.markdown("---")
+        st.subheader("Comparação das envoltórias exponenciais entre arquivos carregados")
+        compare_names = st.multiselect(
+            "Arquivos para comparar",
+            [item["name"] for item in waveforms],
+            default=[item["name"] for item in waveforms],
+            key="envelope_compare_files_v022",
+        )
+
+        envelope_rows = []
+        for item in waveforms:
+            if item["name"] not in compare_names:
+                continue
+            peaks = add_peak_ids(
+                ringdown_peak_table(
+                    item["time_s"],
+                    item["value"],
+                    start_us=ring_start_us,
+                    end_us=ring_end_us,
+                    baseline_mode=baseline_mode,
+                    peak_threshold_fraction=peak_threshold_fraction,
+                    min_peak_distance_us=min_peak_distance_us,
+                )
+            )
+            row, _fit = fit_exponential_envelope(
+                peaks,
+                n_peaks=int(n_fit_peaks),
+                polarity=polarity,
+                selected_peak_ids=None,
+                file_name=item["name"],
+            )
+            envelope_rows.append(row)
+
+        envelope_df = pd.DataFrame(envelope_rows)
+        fig_cmp = plot_envelope_comparison(envelope_df, normalize=normalize_env)
+        st.plotly_chart(
+            fig_cmp,
+            use_container_width=True,
+            key="envelope_comparison_chart_v022",
+        )
+        st.dataframe(envelope_df, use_container_width=True)
+
+        st.download_button(
+            "Baixar métricas de envoltória em CSV",
+            data=envelope_df.to_csv(index=False).encode("utf-8"),
+            file_name="metricas_envoltoria_exponencial.csv",
+            mime="text/csv",
+            key="download_envelope_metrics_v022",
+        )
+
+        with st.expander("Picos detectados no sinal selecionado"):
             st.dataframe(peak_df, use_container_width=True)
 
     elif analysis_mode == "Antes × depois":
@@ -514,13 +926,13 @@ with tab_signal:
                 "Sinal ANTES",
                 [item["name"] for item in waveforms],
                 index=0,
-                key="before_after_before_select_v021",
+                key="before_after_before_select_v022",
             )
             after_name = col_ba_2.selectbox(
                 "Sinal DEPOIS",
                 [item["name"] for item in waveforms],
                 index=min(1, len(waveforms) - 1),
-                key="before_after_after_select_v021",
+                key="before_after_after_select_v022",
             )
             before_item = next(item for item in waveforms if item["name"] == before_name)
             after_item = next(item for item in waveforms if item["name"] == after_name)
@@ -572,7 +984,7 @@ with tab_signal:
             normalize_ba = st.checkbox(
                 "Normalizar curvas antes/depois pelo pico absoluto",
                 value=False,
-                key="before_after_normalize_v021",
+                key="before_after_normalize_v022",
             )
             fig_ba = plot_waveforms(
                 [before_item, after_item],
@@ -586,7 +998,7 @@ with tab_signal:
             st.plotly_chart(
                 fig_ba,
                 use_container_width=True,
-                key="before_after_overlay_chart_v021",
+                key="before_after_overlay_chart_v022",
             )
 
             st.subheader("Tabela de variações do ringing")
@@ -603,7 +1015,7 @@ with tab_signal:
                 data=compare_df.to_csv(index=False).encode("utf-8"),
                 file_name="comparacao_antes_depois_ringdown.csv",
                 mime="text/csv",
-                key="download_before_after_csv_v021",
+                key="download_before_after_csv_v022",
             )
 
     elif analysis_mode == "V × I / potência":
@@ -617,13 +1029,13 @@ with tab_signal:
                 "Canal de tensão",
                 [item["name"] for item in waveforms],
                 index=0,
-                key="vi_voltage_select_v021",
+                key="vi_voltage_select_v022",
             )
             current_name = col2.selectbox(
                 "Canal de corrente",
                 [item["name"] for item in waveforms],
                 index=min(1, len(waveforms) - 1),
-                key="vi_current_select_v021",
+                key="vi_current_select_v022",
             )
             current_scale = col3.number_input(
                 "Fator do canal de corrente (A por unidade lida)",
@@ -632,7 +1044,7 @@ with tab_signal:
                 step=0.1,
                 format="%.6g",
                 help="Use 1 se o arquivo já estiver em ampères. Se estiver em volts de shunt/probe, informe A/V.",
-                key="vi_current_scale_v021",
+                key="vi_current_scale_v022",
             )
 
             voltage_item = next(item for item in waveforms if item["name"] == voltage_name)
@@ -681,7 +1093,7 @@ with tab_signal:
             )
             fig_p.update_xaxes(showgrid=True)
             fig_p.update_yaxes(showgrid=True)
-            st.plotly_chart(fig_p, use_container_width=True, key="vi_power_chart_v021")
+            st.plotly_chart(fig_p, use_container_width=True, key="vi_power_chart_v022")
 
             st.subheader("Métricas V-I-P")
             st.dataframe(
@@ -694,7 +1106,7 @@ with tab_signal:
                 data=vip_csv_bytes(t, v, i, p),
                 file_name="analise_v_i_p.csv",
                 mime="text/csv",
-                key="download_vip_csv_v021",
+                key="download_vip_csv_v022",
             )
 
 with tab_export:

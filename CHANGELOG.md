@@ -1,36 +1,33 @@
 # Changelog
 
-## v0.2.1 — Signal analysis tabs
+## v0.2.2 - Envelope analysis
 
-- Reduced top-level interface to three tabs: Signal Analysis, Export, and Header.
-- Moved single-signal, multi-signal, ringdown, before-after, and V-I/power tools into a single Signal Analysis operation selector.
-- Updated widget keys to avoid Streamlit duplicate element IDs after the UI consolidation.
-
-## v0.2.0-resonance
-
-Suggested commit name:
+Suggested commit:
 
 ```text
-Add resonance ringdown and before-after waveform analysis
+Add selectable exponential ringdown envelope analysis
 ```
 
 ### Added
 
-- Dedicated resonance/ringdown tab.
-- Manual ringdown analysis window in microseconds.
-- Positive/negative peak detection.
-- Ringdown period estimated from same-polarity peaks, alternating extrema and zero crossings.
-- Damped frequency and estimated natural frequency.
-- Logarithmic decrement, damping ratio, Q factor and envelope decay time constant.
-- Envelope fit R².
-- Ringdown energy and decay per cycle.
-- Before/after comparison tab for electroporation experiments.
-- Percent deltas for period, frequency, tau, Q and ringdown energy.
-- Waveform similarity metrics: Pearson correlation, NRMSE, MAE, max difference and cross-correlation delay.
-- Exploratory resonance_shift_score.
-- Extended V-I analysis with charge, effective resistance and FFT impedance estimate.
+- Mouse selection of ringdown peaks using Plotly box/lasso selection.
+- Exponential envelope fitting from selected peaks.
+- Automatic fallback to the last N detected peaks when no manual selection is made.
+- Envelope comparison across multiple loaded ISF files.
+- Normalized envelope overlay for before/after electroporation comparisons.
+- CSV export for envelope metrics.
 
-### Fixed/Kept
+### Changed
 
-- Unique Streamlit keys for Plotly charts.
-- NumPy trapezoidal integration compatibility.
+- Reduced redundancy in the signal analysis screen.
+- Merged single-signal and multi-signal visualization into **Visão geral / formas de onda**.
+- Kept only four operations inside the main analysis tab:
+  - Visão geral / formas de onda
+  - Ressonância e envoltória
+  - Antes × depois
+  - V × I / potência
+
+### Notes
+
+- The envelope fit uses `|V_peak| = A0 * exp(-(t - t0) / tau)`.
+- `tau_us` and decay-per-cycle are exploratory resonance markers and should be interpreted together with repeatability, sample geometry, conductivity and electrode contact.

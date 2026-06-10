@@ -1,14 +1,53 @@
-# ENSA ISF Analyzer v0.2.0-resonance
+# ENSA ISF Analyzer v0.2.2
 
-Mini-IDE local em Python/Streamlit para carregar, visualizar e analisar arquivos Tektronix `.ISF`, com foco em pulsos, ringing, ressonância e eletroporação.
+Mini-IDE local para análise de formas de onda Tektronix `.ISF`, com foco em eletroporação, PEF e assinatura ressonante/ringdown.
 
-## Como rodar no Windows
+## Novidades da v0.2.2
 
-```bat
-run_windows.bat
+- Interface otimizada dentro da aba **Análise de sinais**.
+- Fusão das análises de sinal único e múltiplos sinais em **Visão geral / formas de onda**.
+- Nova análise **Ressonância e envoltória**.
+- Seleção de picos com mouse no gráfico Plotly usando box/lasso.
+- Ajuste de envoltória exponencial nos picos selecionados ou nos últimos N picos detectados.
+- Comparação das envoltórias exponenciais entre vários arquivos carregados.
+- Exportação das métricas da envoltória em CSV.
+
+## Abas principais
+
+1. **Análise de sinais**
+   - Visão geral / formas de onda
+   - Ressonância e envoltória
+   - Antes × depois
+   - V × I / potência
+
+2. **Exportação**
+   - Métricas gerais
+   - Métricas de ringing
+   - Forma de onda individual em CSV
+
+3. **Cabeçalho**
+   - Metadados extraídos
+   - Cabeçalho bruto Tektronix
+
+## Como usar a envoltória exponencial
+
+1. Carregue um ou mais arquivos `.ISF`.
+2. Ajuste a janela de ringing na barra lateral.
+3. Entre em **Análise de sinais → Ressonância e envoltória**.
+4. Escolha o sinal.
+5. Selecione os picos finais com o mouse usando box/lasso no gráfico.
+6. Se nenhum pico for selecionado, o software usa automaticamente os últimos N picos detectados.
+7. Compare o valor de `tau_us`, `decaimento_por_periodo_percent`, `r2_envelope` e as curvas normalizadas entre os arquivos.
+
+O modelo ajustado é:
+
+```text
+|V_peak(t)| = A0 * exp(-(t - t0) / tau)
 ```
 
-Ou manualmente:
+## Instalação
+
+### Windows
 
 ```bat
 python -m venv .venv
@@ -17,92 +56,27 @@ pip install -r requirements.txt
 streamlit run app.py
 ```
 
-## Como rodar no Linux/macOS
+Ou execute:
+
+```bat
+run_windows.bat
+```
+
+### Linux/macOS
+
+```bash
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt
+streamlit run app.py
+```
+
+Ou execute:
 
 ```bash
 bash run_linux_mac.sh
 ```
 
-## Principais recursos
+## Observação de desempenho
 
-### Sinal único
-
-- leitura `.ISF` Tektronix;
-- Vmax, Vmin, Vpp e RMS;
-- largura de pulso por limiar relativo;
-- frequência dominante por FFT;
-- frequência por cruzamento de zero;
-- área assinada e área absoluta;
-- energia aproximada em carga resistiva;
-- campo elétrico em V/m e kV/cm a partir do gap.
-
-### Ressonância / ringing
-
-A versão v0.2 adiciona análise dedicada da oscilação natural nos picos finais da onda:
-
-- janela manual de ringing em µs;
-- detecção de picos positivos e negativos;
-- período por picos de mesma polaridade;
-- período por extremos alternados;
-- período por cruzamento de zero;
-- frequência amortecida;
-- frequência natural estimada;
-- constante de decaimento do envelope, `tau`;
-- decremento logarítmico;
-- razão de amortecimento `zeta`;
-- fator de qualidade `Q`;
-- energia do ringing;
-- decaimento percentual por ciclo;
-- tempo estimado até 10% e acomodação a 5%;
-- assimetria entre semiciclos positivo/negativo;
-- R² do ajuste de envelope.
-
-### Antes × depois da eletroporação
-
-Comparação direta entre uma aquisição antes e outra depois:
-
-- variação percentual de período;
-- variação percentual de frequência;
-- variação percentual de `tau`;
-- variação percentual de `Q`;
-- variação percentual da energia do ringing;
-- correlação de forma de onda;
-- NRMSE;
-- atraso por correlação cruzada;
-- índice exploratório `resonance_shift_score`.
-
-> O `resonance_shift_score` é um indicador exploratório para triagem experimental. Ele ainda não deve ser tratado como marcador biológico validado.
-
-### V × I / potência
-
-Quando há um canal de tensão e outro de corrente:
-
-- P(t) = V(t)I(t);
-- energia integral ∫Pdt;
-- carga ∫Idt;
-- energia absoluta;
-- resistência efetiva;
-- impedância instantânea média/mediana;
-- módulo e fase aproximados da impedância por FFT;
-- atraso V-I por correlação cruzada.
-
-## Sugestão de commit
-
-```text
-Add resonance ringdown and before-after waveform analysis
-```
-
-## Observações importantes
-
-- Ajuste a janela de ringing para capturar apenas a oscilação natural, evitando incluir o pulso principal quando possível.
-- Para comparar antes/depois, use a mesma janela de ringing, mesmo gap, mesma configuração de probe e mesma escala do osciloscópio.
-- A energia resistiva depende do valor de carga equivalente informado. Para análise real com amostra biológica, prefira medir tensão e corrente simultaneamente.
-
-
-## v0.2.1 — Interface simplificada
-
-A interface agora possui apenas três abas principais:
-
-1. **Análise de sinais** — concentra sinal único, múltiplos sinais, ressonância/ringing, antes × depois e V × I / potência.
-2. **Exportação** — concentra os downloads CSV.
-3. **Cabeçalho** — concentra metadados e cabeçalho bruto ISF.
+Streamlit é ótimo para prototipagem científica, mas pode ficar lento com muitos arquivos `.ISF` grandes porque o navegador precisa renderizar muitos pontos e o script é reexecutado a cada interação. Para uso com muitos ensaios, a recomendação futura é migrar a visualização pesada para PySide6/PyQtGraph, mantendo o núcleo de análise NumPy/Pandas.
