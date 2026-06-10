@@ -1,70 +1,99 @@
-# ENSA ISF Analyzer
+# ENSA ISF Analyzer v0.2.0-resonance
 
-Mini-IDE em Python/Streamlit para carregar arquivos Tektronix `.ISF`, visualizar formas de onda e extrair métricas para análise de pulsos, ringing, campo elétrico e energia.
+Mini-IDE local em Python/Streamlit para carregar, visualizar e analisar arquivos Tektronix `.ISF`, com foco em pulsos, ringing, ressonância e eletroporação.
 
-## Recursos
+## Como rodar no Windows
 
-- Carregamento de múltiplos arquivos `.ISF`
-- Visualização temporal com zoom interativo
-- Métricas automáticas:
-  - máximo, mínimo, pico-a-pico, RMS
-  - largura de pulso por limiar
-  - frequência dominante por FFT
-  - estimativa de ringing
-  - constante de decaimento aproximada
-  - energia aproximada em carga resistiva
-  - campo elétrico em V/m e kV/cm usando distância entre eletrodos
-- Comparação de múltiplos sinais
-- Análise V × I, com cálculo de potência e energia quando houver canal de corrente
-- Exportação de tabela de métricas em CSV
-- Exportação de forma de onda processada em CSV
+```bat
+run_windows.bat
+```
 
-## Instalação
+Ou manualmente:
 
-Crie um ambiente virtual, instale as dependências e rode:
-
-```bash
+```bat
 python -m venv .venv
-
-# Windows
 .venv\Scripts\activate
-
-# Linux/macOS
-source .venv/bin/activate
-
 pip install -r requirements.txt
 streamlit run app.py
 ```
 
-## Uso sugerido
+## Como rodar no Linux/macOS
 
-1. Abra a aplicação.
-2. Carregue um ou mais arquivos `.ISF`.
-3. Informe o gap entre eletrodos em mm.
-4. Ajuste o limiar de detecção do pulso.
-5. Use a aba de sinal único para estudar uma aquisição.
-6. Use a aba múltiplos sinais para comparar vários disparos/canais.
-7. Use a aba V × I se tiver canal de tensão e canal de corrente.
+```bash
+bash run_linux_mac.sh
+```
+
+## Principais recursos
+
+### Sinal único
+
+- leitura `.ISF` Tektronix;
+- Vmax, Vmin, Vpp e RMS;
+- largura de pulso por limiar relativo;
+- frequência dominante por FFT;
+- frequência por cruzamento de zero;
+- área assinada e área absoluta;
+- energia aproximada em carga resistiva;
+- campo elétrico em V/m e kV/cm a partir do gap.
+
+### Ressonância / ringing
+
+A versão v0.2 adiciona análise dedicada da oscilação natural nos picos finais da onda:
+
+- janela manual de ringing em µs;
+- detecção de picos positivos e negativos;
+- período por picos de mesma polaridade;
+- período por extremos alternados;
+- período por cruzamento de zero;
+- frequência amortecida;
+- frequência natural estimada;
+- constante de decaimento do envelope, `tau`;
+- decremento logarítmico;
+- razão de amortecimento `zeta`;
+- fator de qualidade `Q`;
+- energia do ringing;
+- decaimento percentual por ciclo;
+- tempo estimado até 10% e acomodação a 5%;
+- assimetria entre semiciclos positivo/negativo;
+- R² do ajuste de envelope.
+
+### Antes × depois da eletroporação
+
+Comparação direta entre uma aquisição antes e outra depois:
+
+- variação percentual de período;
+- variação percentual de frequência;
+- variação percentual de `tau`;
+- variação percentual de `Q`;
+- variação percentual da energia do ringing;
+- correlação de forma de onda;
+- NRMSE;
+- atraso por correlação cruzada;
+- índice exploratório `resonance_shift_score`.
+
+> O `resonance_shift_score` é um indicador exploratório para triagem experimental. Ele ainda não deve ser tratado como marcador biológico validado.
+
+### V × I / potência
+
+Quando há um canal de tensão e outro de corrente:
+
+- P(t) = V(t)I(t);
+- energia integral ∫Pdt;
+- carga ∫Idt;
+- energia absoluta;
+- resistência efetiva;
+- impedância instantânea média/mediana;
+- módulo e fase aproximados da impedância por FFT;
+- atraso V-I por correlação cruzada.
+
+## Sugestão de commit
+
+```text
+Add resonance ringdown and before-after waveform analysis
+```
 
 ## Observações importantes
 
-- O arquivo `.PNG` do osciloscópio serve para conferência visual.
-- O arquivo `.ISF` é o dado real usado na análise.
-- Energia por carga resistiva usa `E = ∫ v²/R dt`.
-- Para análise V × I, use `P(t)=V(t)I(t)` e `E=∫P(t)dt`.
-- Se o canal de corrente estiver em volts por causa de shunt ou probe, configure o fator A/V.
-
-
-## Correção v0.1.1
-
-Esta versão remove o uso direto de `np.trapz` e usa uma função de compatibilidade
-com `np.trapezoid`, evitando o erro:
-
-```text
-AttributeError: module 'numpy' has no attribute 'trapz'
-```
-
-
-## v0.1.2
-
-- Corrige `StreamlitDuplicateElementId` adicionando `key` único aos gráficos `st.plotly_chart`.
+- Ajuste a janela de ringing para capturar apenas a oscilação natural, evitando incluir o pulso principal quando possível.
+- Para comparar antes/depois, use a mesma janela de ringing, mesmo gap, mesma configuração de probe e mesma escala do osciloscópio.
+- A energia resistiva depende do valor de carga equivalente informado. Para análise real com amostra biológica, prefira medir tensão e corrente simultaneamente.
