@@ -1,5 +1,21 @@
 # Changelog
 
+## v0.3.4 - Positive peaks on full waveform
+
+- Restored the full waveform trace in Envelope mode.
+- Limited clickable markers to positive local maxima only.
+- Removed minima/valley markers from the Envelope workflow.
+- Simplified quick selection to last N positive peaks or N largest positive peaks.
+- Kept multi-file overlay in the same axis for direct envelope comparison.
+
+## v0.3.3 - Extrema-only envelope selector
+
+- Changed Envelope mode to draw only local maxima and minima instead of the full waveform trace.
+- Added quick selection buttons for last N maxima, last N minima, last N maxima + minima, and N largest extrema by absolute amplitude.
+- Kept manual mouse-click selection on extrema.
+- Improved responsiveness by avoiding full waveform rendering during envelope clicks.
+- Improved wording from generic peaks to maxima/minima extrema for clearer electroporation ringdown analysis.
+
 ## v0.3.2 - Multi-envelope fast selector
 
 - Added a shared-axis Envelope selector for 1 to 4 waveforms.
