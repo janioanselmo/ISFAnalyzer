@@ -1,14 +1,17 @@
-# ISF Analyzer v0.3.16 - Robust Peak Detection Audit
+# ISF Analyzer v0.3.18 — Decay-aware peak detection audit
 
-## Scope
-This version focuses only on the Envelope peak-selection algorithm.
+## Summary
+This release refines the Envelope automatic selection algorithm for tail-oriented analysis.
 
-## Changes checked
-- Python compilation passed for `app.py` and `ensaisf/*.py`.
-- The full waveform remains visible in Envelope.
-- Only dominant positive maxima are marked as clickable candidates.
-- Automatic selection with `Últimos N picos` now uses an adaptive dominance filter before selecting the last peaks.
-- The candidate pool is larger, but filtered, reducing sensitivity to tiny late ripples and noise when several files are overlaid.
+## Fix
+When `Critério = Últimos N picos`, late maxima can be physically relevant even when they are below the zero axis or much smaller than the first lobes. The previous candidate filter was still too strict for these late decaying peaks.
 
-## Notes
-The Streamlit visual workflow must still be validated in the user's local environment.
+## Changes
+- Uses a looser detection threshold only for `Últimos N picos`.
+- Uses a larger candidate pool only for tail-oriented peak selection.
+- Keeps the stricter candidate pool for `N maiores picos`.
+- Preserves the existing UI, click selection and multi-file overlay behavior.
+
+## Validation
+- Python compile check passed for `app.py`, `ensaisf/analysis.py` and `ensaisf/isf_parser.py`.
+- No structural change to ISF parsing, export, comparison or power analysis.

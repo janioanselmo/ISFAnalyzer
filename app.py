@@ -40,7 +40,7 @@ st.set_page_config(
 )
 
 
-APP_VERSION = "0.3.17-prominent-peak-detection"
+APP_VERSION = "0.3.18-decay-aware-peak-detection"
 
 
 # Global color order used by all analysis screens.
@@ -1646,7 +1646,7 @@ def _envelope_peak_cache_key(
     candidate_floor_fraction: float,
 ) -> tuple:
     return (
-        "envelope_peaks_v0317",
+        "envelope_peaks_v0318",
         item.get("data_hash"),
         round(float(start_us), 6),
         round(float(end_us), 6),
@@ -1669,7 +1669,7 @@ def cached_dominant_positive_peaks(
     candidate_floor_fraction: float,
 ) -> tuple[pd.DataFrame, int]:
     """Cache dominant peak detection across click reruns."""
-    cache = st.session_state.setdefault("_envelope_peak_cache_v0317", {})
+    cache = st.session_state.setdefault("_envelope_peak_cache_v0318", {})
     key = _envelope_peak_cache_key(
         item,
         start_us,
@@ -2279,9 +2279,22 @@ with tab_signal:
             # Keep enough candidates to make "Últimos N picos" robust, even
             # when many waveforms are overlaid. The adaptive floor below removes
             # tiny late ripples, so a larger candidate pool does not clutter as much.
-            candidate_count = max(int(auto_n) * 4, int(auto_n) + 8, 16)
-            candidate_count = min(candidate_count, 40)
-            candidate_floor_fraction = max(0.10, min(0.30, float(env_threshold) * 3.0))
+            if auto_mode == "Últimos N picos":
+                # In tail-oriented envelope analysis, late lobes may be below the
+                # zero axis but still be physically relevant. Use a looser
+                # detection threshold and a larger candidate pool, then let the
+                # adaptive dominance filter remove noise/ripple.
+                candidate_count = max(int(auto_n) * 10, int(auto_n) + 20, 32)
+                candidate_count = min(candidate_count, 120)
+                candidate_floor_fraction = max(0.02, min(0.08, float(env_threshold) * 0.75))
+                detection_threshold = max(0.003, min(float(env_threshold), float(env_threshold) * 0.35))
+            else:
+                # For amplitude-priority analysis, keep a stricter pool so that
+                # the selected points truly represent the dominant lobes.
+                candidate_count = max(int(auto_n) * 4, int(auto_n) + 8, 16)
+                candidate_count = min(candidate_count, 40)
+                candidate_floor_fraction = max(0.10, min(0.30, float(env_threshold) * 3.0))
+                detection_threshold = float(env_threshold)
 
             for ring_item in selected_items:
                 peak_df, raw_count = cached_dominant_positive_peaks(
@@ -2289,7 +2302,7 @@ with tab_signal:
                     start_us=env_start_us,
                     end_us=env_end_us,
                     baseline_mode=baseline_mode,
-                    threshold=env_threshold,
+                    threshold=detection_threshold,
                     min_distance_us=env_min_distance,
                     candidate_count=candidate_count,
                     candidate_floor_fraction=candidate_floor_fraction,
