@@ -1,5 +1,14 @@
 # Changelog
 
+## v0.3.7 - Performance polish
+
+- Matched the waveform/peak selector colors with the envelope comparison colors.
+- Renamed the automatic selection button to Detectar Automático.
+- Cached dominant peak detection during Envelope click reruns.
+- Reduced Envelope image draw load by capping the selector rendering point count.
+- Optimized the Power tab by caching V/I alignment and computing expensive FFT/xcorr metrics on a bounded representative sample while keeping full-resolution energy, charge and extrema.
+- Moved full V-I-P CSV generation behind an explicit preparation button to avoid slowing the Power tab.
+
 ## v0.3.6 - Envelope defaults
 
 - Changed the sidebar ringdown window defaults to -100 µs and 500 µs.

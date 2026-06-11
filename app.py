@@ -43,7 +43,29 @@ st.set_page_config(
 )
 
 
-APP_VERSION = "0.3.6-envelope-defaults"
+APP_VERSION = "0.3.7-performance-polish"
+
+
+SERIES_COLORS_RGB = [
+    (0, 109, 204),
+    (230, 126, 34),
+    (46, 160, 67),
+    (132, 94, 194),
+    (204, 88, 88),
+]
+SERIES_COLORS_HEX = [f"rgb({r},{g},{b})" for r, g, b in SERIES_COLORS_RGB]
+SELECTED_PEAK_COLOR_RGB = (235, 68, 68)
+ENVELOPE_IMAGE_MAX_POINTS = 8_000
+POWER_METRIC_MAX_POINTS = 12_000
+POWER_PLOT_MAX_POINTS = 12_000
+
+
+def _trapz(y: np.ndarray, x: np.ndarray) -> float:
+    if len(y) < 2 or len(x) < 2:
+        return float("nan")
+    if hasattr(np, "trapezoid"):
+        return float(np.trapezoid(y, x))
+    return float(np.trapz(y, x))
 
 
 def _format_metric(value: float, unit: str = "", precision: int = 4) -> str:
@@ -739,7 +761,7 @@ def plot_envelope_comparison(envelope_df: pd.DataFrame, normalize: bool = True):
     if envelope_df.empty:
         return fig
 
-    for _, row in envelope_df.iterrows():
+    for idx, (_, row) in enumerate(envelope_df.iterrows()):
         if not np.isfinite(row.get("tau_us", np.nan)) or not np.isfinite(row.get("a0", np.nan)):
             continue
         duration = row.get("ultimo_pico_us", np.nan) - row.get("t0_us", np.nan)
@@ -747,12 +769,14 @@ def plot_envelope_comparison(envelope_df: pd.DataFrame, normalize: bool = True):
             duration = row["tau_us"] * 3.0
         x_us = np.linspace(0.0, duration, 500)
         y = np.exp(-x_us / row["tau_us"]) if normalize else row["a0"] * np.exp(-x_us / row["tau_us"])
+        color = SERIES_COLORS_HEX[idx % len(SERIES_COLORS_HEX)]
         fig.add_trace(
             go.Scatter(
                 x=x_us,
                 y=y,
                 mode="lines",
                 name=str(row["arquivo"]),
+                line=dict(color=color, width=2.5),
             )
         )
 
@@ -1335,14 +1359,8 @@ def build_multi_clickable_waveform_image(
 
     grid_color = (225, 230, 236)
     axis_color = (90, 96, 106)
-    palette = [
-        (0, 109, 204),
-        (230, 126, 34),
-        (46, 160, 67),
-        (132, 94, 194),
-        (204, 88, 88),
-    ]
-    selected_color = (235, 68, 68)
+    palette = SERIES_COLORS_RGB
+    selected_color = SELECTED_PEAK_COLOR_RGB
 
     draw.rectangle([left, top, right, bottom], outline=(238, 241, 245), width=1)
     for idx in range(6):
@@ -1550,6 +1568,162 @@ def compact_metrics_table(rows: list[dict]) -> pd.DataFrame:
     ]
     df = pd.DataFrame(rows)
     return df[[c for c in cols if c in df.columns]]
+
+
+def _envelope_peak_cache_key(
+    item: dict,
+    start_us: float,
+    end_us: float,
+    baseline_mode: str,
+    threshold: float,
+    min_distance_us: float,
+    candidate_count: int,
+) -> tuple:
+    return (
+        "envelope_peaks_v037",
+        item.get("data_hash"),
+        round(float(start_us), 6),
+        round(float(end_us), 6),
+        baseline_mode,
+        round(float(threshold), 8),
+        round(float(min_distance_us), 6),
+        int(candidate_count),
+    )
+
+
+def cached_dominant_positive_peaks(
+    item: dict,
+    start_us: float,
+    end_us: float,
+    baseline_mode: str,
+    threshold: float,
+    min_distance_us: float,
+    candidate_count: int,
+) -> tuple[pd.DataFrame, int]:
+    """Cache dominant peak detection across click reruns."""
+    cache = st.session_state.setdefault("_envelope_peak_cache_v037", {})
+    key = _envelope_peak_cache_key(
+        item,
+        start_us,
+        end_us,
+        baseline_mode,
+        threshold,
+        min_distance_us,
+        candidate_count,
+    )
+    if key not in cache:
+        raw_peak_df = add_peak_ids(
+            ringdown_peak_table(
+                item["time_s"],
+                item["value"],
+                start_us=start_us,
+                end_us=end_us,
+                baseline_mode=baseline_mode,
+                peak_threshold_fraction=threshold,
+                min_peak_distance_us=min_distance_us,
+            )
+        )
+        raw_peak_df = filter_peak_table_by_polarity(raw_peak_df, "Somente máximos").reset_index(drop=True)
+        peak_df = dominant_positive_peak_candidates(
+            raw_peak_df,
+            int(candidate_count),
+            min_separation_us=max(float(min_distance_us) * 8.0, float(min_distance_us)),
+        )
+        cache[key] = (peak_df.copy(), int(len(raw_peak_df)))
+    peak_df, raw_count = cache[key]
+    return peak_df.copy(), int(raw_count)
+
+
+def _decimate_aligned_arrays(
+    time_s: np.ndarray,
+    first: np.ndarray,
+    second: np.ndarray,
+    max_points: int,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    if len(time_s) <= max_points:
+        return time_s, first, second
+    step = int(np.ceil(len(time_s) / max_points))
+    return time_s[::step], first[::step], second[::step]
+
+
+def fast_vi_metrics(time_s: np.ndarray, voltage_v: np.ndarray, current_a: np.ndarray) -> dict:
+    """Compute V/I metrics while keeping expensive FFT/xcorr on a bounded point count."""
+    if len(time_s) < 2:
+        return {}
+
+    power_w = voltage_v * current_a
+    metrics = {}
+    t_metric, v_metric, i_metric = _decimate_aligned_arrays(
+        time_s,
+        voltage_v,
+        current_a,
+        max_points=POWER_METRIC_MAX_POINTS,
+    )
+    # The original vi_metrics is accurate but its cross-correlation becomes very
+    # expensive with million-sample records. Running it on a representative,
+    # aligned subset keeps the UI responsive while preserving full-resolution
+    # integrals and extrema below.
+    metrics.update(vi_metrics(t_metric, v_metric, i_metric))
+
+    i2_dt = _trapz(current_a ** 2, time_s)
+    energy_j = _trapz(power_w, time_s)
+    i_threshold = 0.05 * float(np.max(np.abs(current_a))) if len(current_a) else float("nan")
+    if np.isfinite(i_threshold) and i_threshold > 0:
+        mask = np.abs(current_a) > i_threshold
+    else:
+        mask = np.zeros_like(current_a, dtype=bool)
+    if np.any(mask):
+        z_inst = voltage_v[mask] / current_a[mask]
+        z_median = float(np.median(z_inst))
+        z_mean = float(np.mean(z_inst))
+    else:
+        z_median = float("nan")
+        z_mean = float("nan")
+
+    metrics.update(
+        {
+            "v_max": float(np.max(voltage_v)),
+            "v_min": float(np.min(voltage_v)),
+            "i_max": float(np.max(current_a)),
+            "i_min": float(np.min(current_a)),
+            "p_max_w": float(np.max(power_w)),
+            "p_min_w": float(np.min(power_w)),
+            "energia_j": energy_j,
+            "energia_abs_j": _trapz(np.abs(power_w), time_s),
+            "carga_c": _trapz(current_a, time_s),
+            "carga_abs_c": _trapz(np.abs(current_a), time_s),
+            "resistencia_efetiva_ohm": energy_j / i2_dt if i2_dt > 0 else float("nan"),
+            "impedancia_instantanea_mediana_ohm": z_median,
+            "impedancia_instantanea_media_ohm": z_mean,
+        }
+    )
+    return metrics
+
+
+def get_power_analysis_cached(
+    voltage_item: dict,
+    current_item: dict,
+    current_scale: float,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, dict]:
+    """Cache aligned V/I arrays and metrics during Streamlit reruns."""
+    cache = st.session_state.setdefault("_power_analysis_cache_v037", {})
+    key = (
+        voltage_item.get("data_hash"),
+        current_item.get("data_hash"),
+        round(float(current_scale), 12),
+    )
+    if key not in cache:
+        t, v, i = align_current_to_voltage(
+            voltage_item["time_s"],
+            voltage_item["value"],
+            current_item["time_s"],
+            current_item["value"],
+            current_scale_a_per_unit=current_scale,
+        )
+        p = v * i
+        vi = fast_vi_metrics(t, v, i)
+        cache[key] = (t, v, i, p, vi)
+    return cache[key]
 
 
 
@@ -1946,25 +2120,16 @@ with tab_signal:
             candidate_count = min(candidate_count, 24)
 
             for ring_item in selected_items:
-                raw_peak_df = add_peak_ids(
-                    ringdown_peak_table(
-                        ring_item["time_s"],
-                        ring_item["value"],
-                        start_us=env_start_us,
-                        end_us=env_end_us,
-                        baseline_mode=baseline_mode,
-                        peak_threshold_fraction=env_threshold,
-                        min_peak_distance_us=env_min_distance,
-                    )
+                peak_df, raw_count = cached_dominant_positive_peaks(
+                    ring_item,
+                    start_us=env_start_us,
+                    end_us=env_end_us,
+                    baseline_mode=baseline_mode,
+                    threshold=env_threshold,
+                    min_distance_us=env_min_distance,
+                    candidate_count=candidate_count,
                 )
-                raw_peak_df = filter_peak_table_by_polarity(raw_peak_df, polarity).reset_index(drop=True)
-                raw_peak_count_by_file[ring_item["name"]] = int(len(raw_peak_df))
-
-                peak_df = dominant_positive_peak_candidates(
-                    raw_peak_df,
-                    candidate_count,
-                    min_separation_us=max(float(env_min_distance) * 8.0, float(env_min_distance)),
-                )
+                raw_peak_count_by_file[ring_item["name"]] = raw_count
                 peaks_by_file[ring_item["name"]] = peak_df
 
                 selected_ids = selected_peak_ids_for_file(ring_item["name"])
@@ -2021,7 +2186,7 @@ with tab_signal:
                 ) + 1
                 st.rerun()
 
-            if action_cols[1].button("Reaplicar automático", key="reapply_auto_peak_selection_v035"):
+            if action_cols[1].button("Detectar Automático", key="detect_auto_peak_selection_v037"):
                 for name in env_selected_names:
                     peak_df = peaks_by_file.get(name, pd.DataFrame())
                     selected_ids = auto_select_positive_peak_ids(peak_df, auto_mode, int(auto_n))
@@ -2075,7 +2240,7 @@ with tab_signal:
                     start_us=env_start_us,
                     end_us=env_end_us,
                     baseline_mode=baseline_mode,
-                    max_points=max_plot_points,
+                    max_points=min(max_plot_points, ENVELOPE_IMAGE_MAX_POINTS),
                     focus_y_on_peaks=focus_y,
                     image_width=1450,
                     image_height=560,
@@ -2085,7 +2250,7 @@ with tab_signal:
                     width=1450,
                     key=(
                         "envelope_multi_image_click_"
-                        f"{st.session_state[_multi_image_click_version_key()]}_v035"
+                        f"{st.session_state[_multi_image_click_version_key()]}_v037"
                     ),
                 )
                 changed = toggle_multi_peak_selection_from_image_click(
@@ -2291,15 +2456,12 @@ with tab_signal:
             voltage_item = next(item for item in waveforms if item["name"] == voltage_name)
             current_item = next(item for item in waveforms if item["name"] == current_name)
 
-            t, v, i = align_current_to_voltage(
-                voltage_item["time_s"],
-                voltage_item["value"],
-                current_item["time_s"],
-                current_item["value"],
-                current_scale_a_per_unit=current_scale,
-            )
-            p = v * i
-            vi = vi_metrics(t, v, i)
+            with st.spinner("Calculando potência e impedância..."):
+                t, v, i, p, vi = get_power_analysis_cached(
+                    voltage_item,
+                    current_item,
+                    current_scale,
+                )
 
             cols = st.columns(6)
             cols[0].metric("Imax", _format_metric(vi.get("i_max"), "A"))
@@ -2315,7 +2477,7 @@ with tab_signal:
             cols[2].metric("Delay V-I", _format_metric(vi.get("delay_v_i_xcorr_us"), "µs"))
             cols[3].metric("xcorr", _format_metric(vi.get("xcorr_v_i_peak"), ""))
 
-            t_plot, p_plot = decimate_for_plot(t, p, max_points=max_plot_points)
+            t_plot, p_plot = decimate_for_plot(t, p, max_points=min(max_plot_points, POWER_PLOT_MAX_POINTS))
             fig_p = go.Figure()
             fig_p.add_trace(
                 go.Scattergl(x=t_plot * 1e6, y=p_plot, mode="lines", name="P(t)=V(t)I(t)")
@@ -2331,13 +2493,24 @@ with tab_signal:
             fig_p.update_yaxes(showgrid=True)
             st.plotly_chart(fig_p, width="stretch", key="power_chart_v026")
             st.dataframe(pd.DataFrame([vi]).T.rename(columns={0: "valor"}), width="stretch")
-            st.download_button(
-                "Baixar V-I-P em CSV",
-                data=vip_csv_bytes(t, v, i, p),
-                file_name="analise_v_i_p.csv",
-                mime="text/csv",
-                key="download_power_csv_v026",
+            csv_key = (
+                "power_vip_csv_v037",
+                voltage_item.get("data_hash"),
+                current_item.get("data_hash"),
+                round(float(current_scale), 12),
             )
+            if st.button("Preparar CSV V-I-P", key="prepare_power_csv_v037"):
+                st.session_state[csv_key] = vip_csv_bytes(t, v, i, p)
+            if csv_key in st.session_state:
+                st.download_button(
+                    "Baixar V-I-P em CSV",
+                    data=st.session_state[csv_key],
+                    file_name="analise_v_i_p.csv",
+                    mime="text/csv",
+                    key="download_power_csv_v037",
+                )
+            else:
+                st.caption("O CSV completo de V-I-P é gerado sob demanda para manter a aba Potência mais rápida.")
 
 with tab_export:
     st.subheader("Exportação")
