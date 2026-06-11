@@ -15,11 +15,11 @@ On Windows, you can also run:
 run_windows.bat
 ```
 
-## v0.3.14 isolated state and palette refinement
+## v0.3.15 isolated state and palette refinement
 
 This package keeps the validated Envelope workflow and fixes the remaining per-tab state issue:
 
-- Internal app version updated to `0.3.14-isolated-state`.
+- Internal app version updated to `0.3.15-select-all-refresh`.
 - File uploads remain global, but each analysis operation now has independent file-selection state.
 - **Sinais** can show one or multiple uploaded files.
 - **Envelope** can show 1 to 4 files in the same axis and keeps its own selection when switching tabs.

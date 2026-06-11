@@ -40,7 +40,7 @@ st.set_page_config(
 )
 
 
-APP_VERSION = "0.3.14-isolated-state"
+APP_VERSION = "0.3.15-select-all-refresh"
 
 
 # Global color order used by all analysis screens.
@@ -51,10 +51,12 @@ SERIES_COLORS_RGB = [
     (0, 109, 204),   # blue - second curve
     (0, 150, 90),    # green - third curve
     (45, 45, 45),    # charcoal - fourth curve
-    (210, 0, 125),   # magenta - fifth curve
-    (0, 155, 170),   # teal - sixth curve
-    (190, 135, 0),   # golden brown - seventh curve
+    (0, 155, 170),   # teal - fifth curve
+    (190, 135, 0),   # golden brown - sixth curve
+    (210, 0, 125),   # magenta - seventh curve
     (120, 80, 30),   # brown - eighth curve
+    (90, 55, 160),   # violet - fallback only for larger overlays
+    (80, 80, 80),    # neutral gray - fallback only
 ]
 SERIES_COLORS_HEX = [f"rgb({r},{g},{b})" for r, g, b in SERIES_COLORS_RGB]
 SELECTED_PEAK_COLOR_RGB = (235, 68, 68)
@@ -1930,7 +1932,7 @@ def synchronize_file_dependent_state(file_names: list[str]) -> None:
     if not file_names:
         return
 
-    previous_names = list(st.session_state.get("_loaded_file_names_v0314", []))
+    previous_names = list(st.session_state.get("_loaded_file_names_v0315", []))
     upload_changed = previous_names != file_names
     added_names = [name for name in file_names if name not in previous_names]
 
@@ -1971,8 +1973,8 @@ def synchronize_file_dependent_state(file_names: list[str]) -> None:
         default_to_all=True,
     )
     _sync_multiselect(
-        "envelope_files_v0314",
-        max_items=4,
+        "envelope_files_v0315",
+        max_items=None,
         include_new_files=True,
         default_to_all=True,
     )
@@ -1991,7 +1993,7 @@ def synchronize_file_dependent_state(file_names: list[str]) -> None:
         st.session_state[image_version_key] = int(
             st.session_state.get(image_version_key, 0)
         ) + 1
-        st.session_state["_loaded_file_names_v0314"] = list(file_names)
+        st.session_state["_loaded_file_names_v0315"] = list(file_names)
 
 
 synchronize_file_dependent_state([item["name"] for item in waveforms])
@@ -2124,18 +2126,20 @@ with tab_signal:
 
         st.markdown("**1) Arquivos e janela de análise**")
         file_names = [item["name"] for item in waveforms]
-        default_files = list(st.session_state.get("envelope_files_v0314", file_names[: min(4, len(file_names))]))
-        default_files = [name for name in default_files if name in file_names][:4]
+        default_files = list(st.session_state.get("envelope_files_v0315", file_names))
+        default_files = [name for name in default_files if name in file_names]
         env_selected_names = st.multiselect(
             "Arquivos no mesmo eixo",
             file_names,
             default=default_files,
-            key="envelope_files_v0314",
-            help="Selecione até 4 arquivos para manter a leitura visual rápida e clara.",
+            key="envelope_files_v0315",
+            help="Selecione um ou mais arquivos. A opção 'Select all' agora mantém todos os arquivos carregados no Envelope.",
         )
-        if len(env_selected_names) > 4:
-            st.warning("Para boa usabilidade e velocidade, use no máximo 4 arquivos por vez.")
-            env_selected_names = env_selected_names[:4]
+        if len(env_selected_names) > 6:
+            st.info(
+                "Muitos arquivos no mesmo eixo podem reduzir a velocidade do clique no Envelope. "
+                "A seleção é permitida, mas para análise fina recomenda-se revisar as curvas em grupos quando necessário."
+            )
 
         control_cols = st.columns([1, 1, 1, 1])
         env_start_us = control_cols[0].number_input(

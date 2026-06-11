@@ -1,6 +1,6 @@
 # Changelog
 
-## v0.3.14 - Isolated per-tab state and palette refinement
+## v0.3.15 - Isolated per-tab state and palette refinement
 
 - Isolated file-selection state between Sinais, Envelope, Comparação, Potência and Exportação.
 - Fixed the issue where opening Potência or Comparação could leave Envelope with only two files after returning.
@@ -25,3 +25,10 @@
 
 - Standardized the global color palette across Sinais, Envelope, Comparação and Potência.
 - Set the default visual order to orange and blue for the first two curves.
+
+## v0.3.15 - Select All Refresh
+
+- Fixed Envelope multiselect limit that restricted overlays to four files.
+- Kept Envelope, Sinais, Comparação and Potência states independent.
+- Allowed `Select all` in `Arquivos no mesmo eixo` to include all uploaded `.ISF` files.
+- Refined the global color order: orange, blue, green, charcoal, teal, golden brown, magenta, brown, with fallbacks for larger overlays.
