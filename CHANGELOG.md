@@ -1,5 +1,15 @@
 # Changelog
 
+## v0.3.9 - Final audit release candidate
+
+- Updated internal app version to `0.3.9-final-audit`.
+- Removed distribution artifacts such as `__pycache__` from the release bundle.
+- Removed a duplicated `st.rerun()` in the Envelope click-selection path.
+- Rechecked Streamlit compatibility: chart/dataframe calls use `width="stretch"`.
+- Rechecked Envelope defaults: ringing window -100 to 500 µs, 4 peaks per curve, criterion **Últimos N picos**.
+- Rechecked naming: app/UI remains **ISF Analyzer**.
+- Added `AUDIT_REPORT.md` with final static and smoke-test checklist.
+
 ## v0.3.7 - Performance polish
 
 - Matched the waveform/peak selector colors with the envelope comparison colors.
@@ -61,3 +71,9 @@
 ## v0.3.0 - Clickable envelope
 
 - Made waveform plot directly clickable for envelope fitting.
+
+## v0.3.8 — Envelope State and Label Fix
+
+- Ajusta o cabeçalho do gráfico clicável de Envelope para evitar sobreposição entre legendas, título e rótulos.
+- Força remontagem segura do gráfico do Envelope ao alternar entre operações, evitando tela vazia ao retornar para Envelope.
+- Mantém o fluxo validado de seleção automática + ajuste manual por clique.

@@ -15,9 +15,6 @@ try:
 except ImportError:  # optional component; app still runs, but image-click selection is disabled
     streamlit_image_coordinates = None
 
-# Kept only for backward compatibility with old local environments.
-# The Envelope workflow no longer depends on streamlit-plotly-events.
-plotly_events = None
 
 from ensaisf.analysis import (
     align_current_to_voltage,
@@ -43,7 +40,7 @@ st.set_page_config(
 )
 
 
-APP_VERSION = "0.3.7-performance-polish"
+APP_VERSION = "0.3.10-envelope-restore-fix"
 
 
 SERIES_COLORS_RGB = [
@@ -170,9 +167,6 @@ def plot_ringdown(
     if len(t_win):
         t_plot, y_plot = decimate_for_plot(t_win, y_win, max_points=max_points)
         # Use regular Scatter here instead of Scattergl.
-        # The streamlit-plotly-events component is more reliable with SVG traces
-        # for click selection; Scattergl can make the chart render as an empty
-        # default axis in some Plotly/Streamlit combinations.
         fig.add_trace(
             go.Scatter(
                 x=t_plot * 1e6,
@@ -636,9 +630,6 @@ def plot_ringdown_with_envelope(
     if len(t_win):
         t_plot, y_plot = decimate_for_plot(t_win, y_win, max_points=max_points)
         # Use regular Scatter here instead of Scattergl.
-        # The streamlit-plotly-events component is more reliable with SVG traces
-        # for click selection; Scattergl can make the chart render as an empty
-        # default axis in some Plotly/Streamlit combinations.
         fig.add_trace(
             go.Scatter(
                 x=t_plot * 1e6,
@@ -705,9 +696,8 @@ def plot_ringdown_with_envelope(
             )
         )
 
-    # Force a meaningful view. Without explicit ranges, some combinations of
-    # streamlit-plotly-events + Plotly can render an empty default axis even
-    # when the peak table is populated.
+    # Force a meaningful view. Without explicit ranges, some Plotly/Streamlit
+    # combinations can render an empty default axis even when data exists.
     x_values = []
     y_values = []
     if len(t_win):
@@ -1354,7 +1344,10 @@ def build_multi_clickable_waveform_image(
 
     img = Image.new("RGB", (image_width, image_height), "white")
     draw = ImageDraw.Draw(img)
-    left, top, right, bottom = 88, 56, image_width - 38, image_height - 72
+    # Keep a compact, dedicated legend band above the plot. Do not draw a
+    # long title inside the image: Streamlit already labels the section and
+    # PIL's default font can mangle accented text.
+    left, top, right, bottom = 96, 76, image_width - 38, image_height - 72
     plot_box = (left, top, right, bottom)
 
     grid_color = (225, 230, 236)
@@ -1382,16 +1375,21 @@ def build_multi_clickable_waveform_image(
         draw.line([(left, y0), (right, y0)], fill=axis_color, width=1)
 
     peak_pixels: dict[tuple[str, int], tuple[float, float]] = {}
+
+    legend_item_width = max(310, (right - left) // 2)
     legend_x = left
-    legend_y = 12
+    legend_y = 18
+    legend_row_height = 24
     for idx, (item, t_win, y_win) in enumerate(waveform_cache):
         name = item["name"]
         color = palette[idx % len(palette)]
-        lx = legend_x + (idx % 2) * 520
-        ly = legend_y + (idx // 2) * 18
+        col = idx % 2
+        row = idx // 2
+        lx = legend_x + col * legend_item_width
+        ly = legend_y + row * legend_row_height
         draw.line([(lx, ly + 9), (lx + 26, ly + 9)], fill=color, width=3)
         draw.ellipse([lx + 10, ly + 4, lx + 20, ly + 14], fill="white", outline=color, width=3)
-        _draw_text(draw, (lx + 34, ly), name)
+        _draw_text(draw, (lx + 34, ly), name[:42])
 
         _draw_polyline_decimated(
             draw,
@@ -1431,10 +1429,8 @@ def build_multi_clickable_waveform_image(
                 r = 7
                 draw.ellipse([px - r, py - r, px + r, py + r], fill="white", outline=color, width=3)
 
-    _draw_text(draw, (left, image_height - 32), "Tempo (µs)")
-    _draw_text(draw, (10, 12), "Amplitude corrigida")
-    _draw_text(draw, (image_width - 520, 12), "Envelope: onda completa + máximos positivos clicáveis")
-    _draw_text(draw, (image_width - 305, 32), "azul/cor = pico | vermelho = selecionado")
+    _draw_text(draw, (left, image_height - 32), "Tempo (us)")
+    _draw_text(draw, (10, top - 28), "Amplitude")
     return img, peak_pixels
 
 
@@ -1915,6 +1911,12 @@ with tab_signal:
         ),
     )
 
+    # Keep the active operation in session state, but do not rebuild the
+    # image-click component just because the user navigated away and returned.
+    # Recreating the component key on mode changes can make the image selector
+    # disappear on some Streamlit/component versions until another button rerun.
+    st.session_state["_previous_signal_analysis_mode_v038"] = analysis_mode
+
     if analysis_mode == "Sinais":
         st.subheader("Sinais")
         metrics, metrics_df = build_waveform_metrics_table(
@@ -2233,6 +2235,9 @@ with tab_signal:
                 if _multi_image_click_version_key() not in st.session_state:
                     st.session_state[_multi_image_click_version_key()] = 0
 
+                st.caption(
+                    "Curvas e picos usam a mesma cor da legenda; vermelho indica os picos selecionados para o ajuste."
+                )
                 click_img, peak_pixels = build_multi_clickable_waveform_image(
                     selected_items,
                     peaks_by_file=peaks_by_file,
@@ -2245,12 +2250,28 @@ with tab_signal:
                     image_width=1450,
                     image_height=560,
                 )
+                image_state_signature = hashlib.md5(
+                    repr(
+                        [
+                            tuple(env_selected_names),
+                            float(env_start_us),
+                            float(env_end_us),
+                            float(env_threshold),
+                            float(env_min_distance),
+                            bool(focus_y),
+                            int(auto_n),
+                            auto_mode,
+                            {name: tuple(selected_by_file.get(name, [])) for name in env_selected_names},
+                        ]
+                    ).encode("utf-8")
+                ).hexdigest()[:10]
                 click_data = streamlit_image_coordinates(
                     click_img,
                     width=1450,
                     key=(
                         "envelope_multi_image_click_"
-                        f"{st.session_state[_multi_image_click_version_key()]}_v037"
+                        f"{st.session_state[_multi_image_click_version_key()]}_"
+                        f"{image_state_signature}_v038"
                     ),
                 )
                 changed = toggle_multi_peak_selection_from_image_click(
