@@ -40,7 +40,7 @@ st.set_page_config(
 )
 
 
-APP_VERSION = "0.3.18-decay-aware-peak-detection"
+APP_VERSION = "0.3.20-natural-ringdown-peaks"
 
 
 # Global color order used by all analysis screens.
@@ -514,13 +514,57 @@ def dominant_positive_peak_candidates(
     candidates["peak_id"] = np.arange(len(candidates), dtype=int)
     return candidates
 
-def auto_select_positive_peak_ids(peak_df: pd.DataFrame, mode: str, n_items: int) -> list[int]:
-    """Build automatic selection using only dominant positive maxima."""
+def _natural_ringdown_peak_ids_after_forced_peak(
+    peak_df: pd.DataFrame,
+    n_items: int,
+) -> list[int]:
+    """Select the first N upper crests after the dominant forced crest.
+
+    This is the default envelope workflow for resonant electroporation tests:
+    the largest upper crest is treated as the end/reference of the forced
+    resonance, and the exponential envelope is fitted on the following natural
+    ringdown crests. Only local maxima already present in ``peak_df`` are used;
+    valleys are never valid candidates here.
+    """
     if peak_df.empty:
         return []
 
     n_items = max(1, int(n_items))
-    if mode == "Últimos N picos":
+    peaks = peak_df.copy().sort_values("tempo_us").reset_index(drop=True)
+    if peaks.empty:
+        return []
+
+    # Prefer prominence/dominance to raw amplitude so a large baseline shift does
+    # not move the anchor to a visually misleading sample. Fall back safely.
+    score_col = "dominance_score" if "dominance_score" in peaks.columns else "amplitude"
+    scores = pd.to_numeric(peaks[score_col], errors="coerce").replace([np.inf, -np.inf], np.nan)
+    if scores.notna().any():
+        forced_pos = int(scores.idxmax())
+    else:
+        forced_pos = int(pd.to_numeric(peaks["amplitude"], errors="coerce").idxmax())
+
+    after = peaks.iloc[forced_pos + 1 :].copy()
+    if len(after) >= n_items:
+        return [int(x) for x in after.head(n_items)["peak_id"].to_list()]
+
+    # If the selected window ends too close to the forced peak, still return the
+    # available post-forced crests. If none exist, fall back to the dominant crest
+    # itself so the UI shows a meaningful reference rather than random tail noise.
+    if not after.empty:
+        return [int(x) for x in after["peak_id"].to_list()]
+
+    return [int(peaks.iloc[forced_pos]["peak_id"])]
+
+
+def auto_select_positive_peak_ids(peak_df: pd.DataFrame, mode: str, n_items: int) -> list[int]:
+    """Build automatic selection using upper-crest candidates only."""
+    if peak_df.empty:
+        return []
+
+    n_items = max(1, int(n_items))
+    if mode == "N picos após maior pico":
+        ids = _natural_ringdown_peak_ids_after_forced_peak(peak_df, n_items)
+    elif mode == "Últimos N picos":
         ids = [
             int(x)
             for x in peak_df.sort_values("tempo_us").tail(n_items)["peak_id"].to_list()
@@ -532,7 +576,9 @@ def auto_select_positive_peak_ids(peak_df: pd.DataFrame, mode: str, n_items: int
 
 
 def auto_select_extrema_ids(peak_df: pd.DataFrame, mode: str, n_items: int) -> list[int]:
-    """Backward-compatible alias for automatic positive-peak selection."""
+    """Backward-compatible alias for automatic upper-crest selection."""
+    if mode in {"N picos após maior pico", "Após maior pico"}:
+        return auto_select_positive_peak_ids(peak_df, "N picos após maior pico", n_items)
     if mode in {"Últimos N máximos", "Últimos N picos"}:
         return auto_select_positive_peak_ids(peak_df, "Últimos N picos", n_items)
     return auto_select_positive_peak_ids(peak_df, "N maiores picos", n_items)
@@ -1646,7 +1692,7 @@ def _envelope_peak_cache_key(
     candidate_floor_fraction: float,
 ) -> tuple:
     return (
-        "envelope_peaks_v0318",
+        "envelope_peaks_v0320",
         item.get("data_hash"),
         round(float(start_us), 6),
         round(float(end_us), 6),
@@ -1657,6 +1703,217 @@ def _envelope_peak_cache_key(
         round(float(candidate_floor_fraction), 6),
     )
 
+
+
+
+def _moving_average_np(y: np.ndarray, window_samples: int) -> np.ndarray:
+    """Fast centered moving average for envelope peak localization."""
+    window_samples = int(window_samples)
+    if window_samples <= 1 or y.size < 5:
+        return y.astype(float, copy=True)
+    window_samples = min(window_samples, max(3, y.size // 5))
+    if window_samples % 2 == 0:
+        window_samples += 1
+    pad = window_samples // 2
+    padded = np.pad(y.astype(float), (pad, pad), mode="edge")
+    csum = np.cumsum(np.insert(padded, 0, 0.0))
+    return (csum[window_samples:] - csum[:-window_samples]) / float(window_samples)
+
+
+def _refine_indices_to_raw_extrema(
+    y: np.ndarray,
+    indices: np.ndarray,
+    search_radius: int,
+    kind: str,
+) -> np.ndarray:
+    """Refine extrema detected on a smoothed signal to the raw waveform."""
+    indices = np.asarray(indices, dtype=int)
+    if indices.size == 0:
+        return indices
+    search_radius = max(1, int(search_radius))
+    refined: list[int] = []
+    n = int(len(y))
+    for idx in indices:
+        left = max(0, int(idx) - search_radius)
+        right = min(n, int(idx) + search_radius + 1)
+        if right <= left:
+            continue
+        segment = y[left:right]
+        if not np.any(np.isfinite(segment)):
+            continue
+        if kind == "max":
+            refined.append(left + int(np.nanargmax(segment)))
+        else:
+            refined.append(left + int(np.nanargmin(segment)))
+    return np.array(sorted(set(refined)), dtype=int)
+
+
+def _prominence_for_upper_peaks(
+    y: np.ndarray,
+    max_indices: np.ndarray,
+    min_indices: np.ndarray,
+) -> np.ndarray:
+    """Prominence of true upper peaks relative to nearest valleys.
+
+    This helper deliberately computes prominence only for local maxima. It
+    prevents negative minima/valleys from being treated as envelope peaks when
+    the user requests "Últimos N picos".
+    """
+    max_indices = np.asarray(max_indices, dtype=int)
+    min_indices = np.asarray(min_indices, dtype=int)
+    if max_indices.size == 0:
+        return np.array([], dtype=float)
+    if min_indices.size == 0:
+        return np.abs(y[max_indices].astype(float))
+
+    min_indices = np.sort(min_indices)
+    positions = np.searchsorted(min_indices, max_indices)
+    prominence = np.zeros(max_indices.shape, dtype=float)
+
+    for i, (idx, pos) in enumerate(zip(max_indices, positions)):
+        valley_values: list[float] = []
+        if pos > 0:
+            valley_values.append(float(y[min_indices[pos - 1]]))
+        if pos < min_indices.size:
+            valley_values.append(float(y[min_indices[pos]]))
+        if not valley_values:
+            prominence[i] = max(0.0, abs(float(y[idx])))
+            continue
+        # For an upper peak, the limiting baseline is the higher neighboring
+        # valley. A true crest must be above that local reference.
+        local_reference = max(valley_values)
+        prominence[i] = max(0.0, float(y[idx]) - local_reference)
+    return prominence
+
+
+def robust_upper_peak_candidates_from_waveform(
+    item: dict,
+    start_us: float,
+    end_us: float,
+    baseline_mode: str,
+    threshold_fraction: float,
+    min_distance_us: float,
+    max_candidates: int,
+    candidate_floor_fraction: float,
+) -> tuple[pd.DataFrame, int]:
+    """Return only upper-lobe maxima for envelope fitting.
+
+    The previous decay-aware detector could allow lower extrema to enter the
+    candidate pool in late low-amplitude portions of the waveform. This routine
+    re-detects candidates from the waveform itself and explicitly accepts only
+    local maxima/crests. A crest may be below the zero axis, but it must still
+    be above its neighboring valleys.
+    """
+    y, _baseline = subtract_baseline(item["time_s"], item["value"], mode=baseline_mode)
+    t_win, y_win, _indices = slice_window_us(item["time_s"], y, start_us, end_us)
+    if len(y_win) < 5:
+        return pd.DataFrame(columns=["tipo", "tempo_us", "amplitude", "prominence", "abs_amplitude", "dominance_score", "peak_id"]), 0
+
+    finite_mask = np.isfinite(y_win)
+    if not np.any(finite_mask):
+        return pd.DataFrame(columns=["tipo", "tempo_us", "amplitude", "prominence", "abs_amplitude", "dominance_score", "peak_id"]), 0
+
+    dt = float(np.median(np.diff(t_win))) if len(t_win) > 1 else 0.0
+    min_distance_samples = 1
+    if dt > 0:
+        min_distance_samples = max(1, int(round(float(min_distance_us) * 1e-6 / dt)))
+
+    # Smooth only for locating broad lobes. The plotted and fitted amplitudes
+    # still come from the original baseline-corrected waveform.
+    smooth_window = max(5, min(2501, min_distance_samples // 6))
+    if smooth_window % 2 == 0:
+        smooth_window += 1
+    y_detect = _moving_average_np(y_win.astype(float), smooth_window)
+
+    max_detect = np.flatnonzero((y_detect[1:-1] > y_detect[:-2]) & (y_detect[1:-1] >= y_detect[2:])) + 1
+    min_detect = np.flatnonzero((y_detect[1:-1] < y_detect[:-2]) & (y_detect[1:-1] <= y_detect[2:])) + 1
+
+    refine_radius = max(2, min_distance_samples // 3)
+    max_idx = _refine_indices_to_raw_extrema(y_win, max_detect, refine_radius, kind="max")
+    min_idx = _refine_indices_to_raw_extrema(y_win, min_detect, refine_radius, kind="min")
+
+    # Keep only extrema that are local maxima in a small neighborhood. This is
+    # the guard that prevents valleys from being displayed as candidate peaks.
+    guard_radius = max(2, min(refine_radius, max(3, min_distance_samples // 4)))
+    valid_maxima: list[int] = []
+    for idx in max_idx:
+        left = max(0, int(idx) - guard_radius)
+        right = min(len(y_win), int(idx) + guard_radius + 1)
+        segment = y_win[left:right]
+        if segment.size == 0 or not np.any(np.isfinite(segment)):
+            continue
+        if float(y_win[idx]) >= float(np.nanmax(segment)) - 1e-12:
+            valid_maxima.append(int(idx))
+    max_idx = np.array(sorted(set(valid_maxima)), dtype=int)
+
+    if max_idx.size == 0:
+        return pd.DataFrame(columns=["tipo", "tempo_us", "amplitude", "prominence", "abs_amplitude", "dominance_score", "peak_id"]), 0
+
+    prominence = _prominence_for_upper_peaks(y_win, max_idx, min_idx)
+    y_range = float(np.nanmax(y_win) - np.nanmin(y_win))
+    peak_abs = float(np.nanmax(np.abs(y_win)))
+    scale = max(peak_abs, 0.5 * y_range, 1e-12)
+    max_prominence = float(np.nanmax(prominence)) if prominence.size else 0.0
+
+    # Use a gentle absolute threshold plus a relative prominence floor. This
+    # keeps late low-amplitude crests available for "Últimos N picos" while
+    # rejecting sample noise.
+    threshold_floor = max(float(threshold_fraction) * scale, float(candidate_floor_fraction) * max_prominence)
+    if not np.isfinite(threshold_floor) or threshold_floor <= 0:
+        threshold_floor = 0.0
+
+    keep_mask = prominence >= threshold_floor
+    # If the user configured an aggressive threshold, fall back to a softer
+    # floor rather than returning no late crests.
+    if np.sum(keep_mask) < min(2, len(max_idx)) and max_prominence > 0:
+        keep_mask = prominence >= max(0.01 * max_prominence, 0.002 * scale)
+
+    max_idx = max_idx[keep_mask]
+    prominence = prominence[keep_mask]
+    if max_idx.size == 0:
+        return pd.DataFrame(columns=["tipo", "tempo_us", "amplitude", "prominence", "abs_amplitude", "dominance_score", "peak_id"]), 0
+
+    # Enforce the requested minimum distance, always keeping the stronger crest
+    # inside each exclusion window. This operates on maxima only.
+    order = np.argsort(prominence)[::-1]
+    kept: list[int] = []
+    kept_prom: list[float] = []
+    for pos in order:
+        idx = int(max_idx[pos])
+        if all(abs(idx - existing) >= min_distance_samples for existing in kept):
+            kept.append(idx)
+            kept_prom.append(float(prominence[pos]))
+    kept_arr = np.array(kept, dtype=int)
+    kept_prom_arr = np.array(kept_prom, dtype=float)
+
+    # Limit visible candidates without destroying "Últimos N". If too many are
+    # present, keep the most prominent set, then sort them by time for display.
+    max_candidates = max(1, int(max_candidates))
+    if kept_arr.size > max_candidates:
+        keep_order = np.argsort(kept_prom_arr)[::-1][:max_candidates]
+        kept_arr = kept_arr[keep_order]
+        kept_prom_arr = kept_prom_arr[keep_order]
+
+    order_time = np.argsort(t_win[kept_arr])
+    kept_arr = kept_arr[order_time]
+    kept_prom_arr = kept_prom_arr[order_time]
+
+    rows = []
+    for idx, prom in zip(kept_arr, kept_prom_arr):
+        amp = float(y_win[int(idx)])
+        rows.append(
+            {
+                "tipo": "positivo",
+                "tempo_us": float(t_win[int(idx)] * 1e6),
+                "amplitude": amp,
+                "prominence": float(prom),
+                "abs_amplitude": abs(amp),
+                "dominance_score": max(abs(amp), float(prom)),
+            }
+        )
+    df = pd.DataFrame(rows).sort_values("tempo_us").reset_index(drop=True)
+    df["peak_id"] = np.arange(len(df), dtype=int)
+    return df, int(len(max_detect))
 
 def cached_dominant_positive_peaks(
     item: dict,
@@ -1669,7 +1926,7 @@ def cached_dominant_positive_peaks(
     candidate_floor_fraction: float,
 ) -> tuple[pd.DataFrame, int]:
     """Cache dominant peak detection across click reruns."""
-    cache = st.session_state.setdefault("_envelope_peak_cache_v0318", {})
+    cache = st.session_state.setdefault("_envelope_peak_cache_v0320", {})
     key = _envelope_peak_cache_key(
         item,
         start_us,
@@ -1681,25 +1938,17 @@ def cached_dominant_positive_peaks(
         candidate_floor_fraction,
     )
     if key not in cache:
-        raw_peak_df = add_peak_ids(
-            ringdown_peak_table(
-                item["time_s"],
-                item["value"],
-                start_us=start_us,
-                end_us=end_us,
-                baseline_mode=baseline_mode,
-                peak_threshold_fraction=threshold,
-                min_peak_distance_us=min_distance_us,
-            )
-        )
-        raw_peak_df = filter_peak_table_by_polarity(raw_peak_df, "Somente máximos").reset_index(drop=True)
-        peak_df = dominant_positive_peak_candidates(
-            raw_peak_df,
-            int(candidate_count),
-            min_separation_us=max(float(min_distance_us) * 8.0, float(min_distance_us)),
+        peak_df, raw_count = robust_upper_peak_candidates_from_waveform(
+            item,
+            start_us=start_us,
+            end_us=end_us,
+            baseline_mode=baseline_mode,
+            threshold_fraction=threshold,
+            min_distance_us=min_distance_us,
+            max_candidates=int(candidate_count),
             candidate_floor_fraction=candidate_floor_fraction,
         )
-        cache[key] = (peak_df.copy(), int(len(raw_peak_df)))
+        cache[key] = (peak_df.copy(), int(raw_count))
     peak_df, raw_count = cache[key]
     return peak_df.copy(), int(raw_count)
 
@@ -2216,7 +2465,7 @@ with tab_signal:
             "Auto-selecionar",
             value=True,
             key="envelope_auto_enabled_v036",
-            help="Quando ativo, o app já seleciona os N picos dominantes para calcular a envoltória.",
+            help="Quando ativo, o app já seleciona os picos da ressonância natural para calcular a envoltória.",
         )
         auto_n = auto_cols[1].number_input(
             "Picos por curva",
@@ -2225,14 +2474,17 @@ with tab_signal:
             value=4,
             step=1,
             key="envelope_auto_n_v036",
-            help="Quantidade de máximos dominantes usados no ajuste. Com 1 pico não há ajuste exponencial; use 2 ou mais.",
+            help="Quantidade de cristas da ressonância natural usadas no ajuste. Com 1 pico não há ajuste exponencial; use 2 ou mais.",
         )
         auto_mode = auto_cols[2].selectbox(
             "Critério",
-            ["N maiores picos", "Últimos N picos"],
-            index=1,
-            key="envelope_auto_mode_v036",
-            help="N maiores picos prioriza amplitude; Últimos N picos prioriza os picos finais no tempo.",
+            ["N picos após maior pico", "N maiores picos", "Últimos N picos"],
+            index=0,
+            key="envelope_auto_mode_v0320",
+            help=(
+                "N picos após maior pico seleciona a resposta natural após a crista forçada dominante. "
+                "N maiores picos prioriza amplitude; Últimos N picos é mantido como modo legado."
+            ),
         )
         focus_y = auto_cols[3].checkbox(
             "Focar Y",
@@ -2279,15 +2531,20 @@ with tab_signal:
             # Keep enough candidates to make "Últimos N picos" robust, even
             # when many waveforms are overlaid. The adaptive floor below removes
             # tiny late ripples, so a larger candidate pool does not clutter as much.
-            if auto_mode == "Últimos N picos":
-                # In tail-oriented envelope analysis, late lobes may be below the
-                # zero axis but still be physically relevant. Use a looser
-                # detection threshold and a larger candidate pool, then let the
-                # adaptive dominance filter remove noise/ripple.
+            if auto_mode == "N picos após maior pico":
+                # Default physical workflow: keep enough post-forced crests to
+                # fit the natural ringdown, but avoid very late ripple/noise.
+                candidate_count = max(int(auto_n) + 8, 14)
+                candidate_count = min(candidate_count, 80)
+                candidate_floor_fraction = max(0.035, min(0.12, float(env_threshold) * 1.10))
+                detection_threshold = max(0.01, min(float(env_threshold), float(env_threshold) * 0.85))
+            elif auto_mode == "Últimos N picos":
+                # Legacy mode: allow a larger pool, but candidates remain upper
+                # crests only. This mode can be more sensitive to tail ripple.
                 candidate_count = max(int(auto_n) * 10, int(auto_n) + 20, 32)
-                candidate_count = min(candidate_count, 120)
-                candidate_floor_fraction = max(0.02, min(0.08, float(env_threshold) * 0.75))
-                detection_threshold = max(0.003, min(float(env_threshold), float(env_threshold) * 0.35))
+                candidate_count = min(candidate_count, 200)
+                candidate_floor_fraction = max(0.015, min(0.06, float(env_threshold) * 0.60))
+                detection_threshold = max(0.006, min(float(env_threshold), float(env_threshold) * 0.45))
             else:
                 # For amplitude-priority analysis, keep a stricter pool so that
                 # the selected points truly represent the dominant lobes.
@@ -2336,7 +2593,7 @@ with tab_signal:
                     {
                         "arquivo": ring_item["name"],
                         "picos_brutos": raw_peak_count_by_file[ring_item["name"]],
-                        "candidatos_dominantes": int(len(peak_df)),
+                        "candidatos_crista": int(len(peak_df)),
                         "picos_selecionados": int(len(selected_ids)),
                     }
                 )
@@ -2392,13 +2649,13 @@ with tab_signal:
 
             st.caption(
                 "No gráfico do Envelope a onda completa permanece desenhada. "
-                "As marcações aparecem somente nos máximos dominantes; vermelho indica os picos usados no ajuste."
+                "As marcações aparecem somente nas cristas/máximos locais relevantes; vermelho indica os picos usados no ajuste."
             )
 
             if any(df.empty for df in peaks_by_file.values()):
                 empty_names = [name for name, df in peaks_by_file.items() if df.empty]
                 st.warning(
-                    "Sem máximos dominantes detectados em: " + ", ".join(empty_names) +
+                    "Sem cristas/máximos relevantes detectados em: " + ", ".join(empty_names) +
                     ". Ajuste a janela, reduza o limiar ou diminua a distância mínima."
                 )
 
