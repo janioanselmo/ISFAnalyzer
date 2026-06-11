@@ -1,26 +1,19 @@
-# Audit report — ISF Analyzer v0.3.22-ringdown-tracker
+# ISF Analyzer v0.3.23 — Audit Report
 
 ## Scope
+Final targeted audit after fixing envelope detection ambiguity in multi-waveform overlays.
 
-Focused patch for Envelope peak detection robustness.
+## Changes verified
+- Detection runs per waveform/file before the combined overlay is rendered.
+- `N picos após maior pico` now uses the largest upper crest of each individual waveform as the forced-resonance anchor.
+- The next N upper crests after that anchor are selected for envelope fitting.
+- A diagnostic table was added to make per-file detection visible.
+- Streamlit state/cache keys were bumped for envelope peak selections and cached candidate tables.
 
-## Checks performed
+## Static checks
+- `app.py`, `ensaisf/analysis.py`, and `ensaisf/isf_parser.py` compile with `python -m py_compile`.
+- `__pycache__` and `.pyc` files were removed from the package.
+- The Tektronix ISF parser was tested with the available `T0039CH1.ISF` sample.
 
-- Python compile check passed for:
-  - `app.py`
-  - `ensaisf/analysis.py`
-  - `ensaisf/isf_parser.py`
-- Removed `__pycache__` and `.pyc` files before packaging.
-
-## Algorithm update
-
-The Envelope automatic selection now uses a physics-guided ringdown tracker:
-
-1. baseline is corrected using the existing baseline mode;
-2. pre-trigger/noise candidates are suppressed with an adaptive noise floor;
-3. only upper crests of resonant cycles are kept as candidates;
-4. the dominant forced crest is used as the anchor;
-5. the upper-crest period is estimated from dominant crests;
-6. the next N natural upper crests are tracked cycle-by-cycle.
-
-This avoids selecting tail ripple or lower valleys as envelope peaks.
+## Runtime note
+The visual Streamlit UI was not executed in this environment, so validate the Envelope tab locally with your multi-file dataset before tagging as stable.

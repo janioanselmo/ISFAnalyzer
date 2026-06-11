@@ -1,9 +1,9 @@
 # Changelog
 
-## v0.3.22-ringdown-tracker
+## v0.3.23 — Per-signal diagnostics
 
-- Replaced the envelope auto-selection logic with a ringdown-cycle tracker.
-- The default mode now anchors on the dominant forced crest and tracks the next N natural upper crests cycle-by-cycle.
-- Removed pre-trigger baseline markers from the candidate pool using adaptive noise gating.
-- Kept valleys/minima out of the envelope candidate set.
-- Kept manual click selection and multi-file overlay behavior unchanged.
+- Enforced per-file envelope detection workflow: each waveform is detected independently before overlay plotting.
+- Simplified `N picos após maior pico`: selects the first N upper-crest candidates after the forced-resonance anchor for each individual signal.
+- Added an expanded diagnostic table showing, per file, the forced anchor time/amplitude and selected peak times/amplitudes.
+- Bumped internal state/cache keys to avoid stale automatic selections from previous versions.
+- Preserved multi-file overlay, image-click selection, color standardization, and independent tab state.

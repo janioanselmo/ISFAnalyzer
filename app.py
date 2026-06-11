@@ -40,7 +40,7 @@ st.set_page_config(
 )
 
 
-APP_VERSION = "0.3.22-ringdown-tracker"
+APP_VERSION = "0.3.23-per-signal-diagnostics"
 
 
 # Global color order used by all analysis screens.
@@ -555,104 +555,108 @@ def _estimate_peak_period_us(peaks: pd.DataFrame, anchor_time_us: float) -> floa
     return median
 
 
+def _forced_peak_id_from_candidates(peak_df: pd.DataFrame) -> int | None:
+    """Return the forced-resonance anchor ID for one isolated waveform.
+
+    This function receives candidates from a single file only. The anchor is
+    the largest upper crest by corrected amplitude. It is not computed from the
+    overlaid/multi-file plot.
+    """
+    if peak_df.empty:
+        return None
+    peaks = peak_df.copy()
+    amplitudes = pd.to_numeric(peaks.get("amplitude"), errors="coerce")
+    valid = peaks[amplitudes.notna()].copy()
+    if valid.empty:
+        return None
+    # Use the highest upper crest as the end of forced resonance. Do not use
+    # absolute value here, because a lower valley can have a larger magnitude
+    # but is not an upper-envelope crest.
+    pos = amplitudes.loc[valid.index].idxmax()
+    try:
+        return int(peaks.loc[pos, "peak_id"])
+    except Exception:
+        return None
+
+
 def _natural_ringdown_peak_ids_after_forced_peak(
     peak_df: pd.DataFrame,
     n_items: int,
 ) -> list[int]:
-    """Select N natural upper crests after the dominant forced crest.
+    """Select the first N upper crests after the forced-resonance anchor.
 
-    The algorithm is intentionally physics-guided:
-
-    1. find the dominant forced upper crest;
-    2. estimate the upper-crest period from the dominant oscillation;
-    3. track the next expected upper crests cycle-by-cycle;
-    4. never select lower valleys/minima as envelope peaks.
-
-    This avoids the old failure mode where the algorithm simply picked the
-    last local maxima in the tail or accepted lower extrema during low-amplitude
-    decay.
+    The detection is intentionally per-signal and intentionally simple at this
+    stage: once the candidate table contains only upper crests for ONE file, the
+    free/natural ringdown peaks are the next N crests after the largest crest.
+    This avoids the previous failure mode where period tracking could jump to a
+    wrong later ripple or appear to mix curves in an overlay.
     """
     if peak_df.empty:
         return []
 
     n_items = max(1, int(n_items))
     peaks = peak_df.copy().sort_values("tempo_us").reset_index(drop=True)
-    if peaks.empty:
+    forced_id = _forced_peak_id_from_candidates(peaks)
+    if forced_id is None:
         return []
 
-    # Forced crest: use raw upper amplitude first, then prominence/dominance as
-    # a fallback. This anchors the free response at the visible forced lobe.
-    amplitudes = pd.to_numeric(peaks["amplitude"], errors="coerce")
-    if amplitudes.notna().any():
-        forced_pos = int(amplitudes.idxmax())
-    else:
-        scores = _dominance_series(peaks)
-        forced_pos = int(scores.idxmax()) if not scores.empty else 0
+    forced_rows = peaks[peaks["peak_id"].astype(int) == int(forced_id)]
+    if forced_rows.empty:
+        return []
+    forced_time = float(forced_rows.iloc[0]["tempo_us"])
 
-    forced_row = peaks.iloc[forced_pos]
-    forced_time = float(forced_row["tempo_us"])
-    forced_score = float(_dominance_series(peaks.iloc[[forced_pos]]).iloc[0])
-    if not np.isfinite(forced_score) or forced_score <= 0:
-        forced_score = max(abs(float(forced_row.get("amplitude", 0.0))), 1.0)
-
-    period_us = _estimate_peak_period_us(peaks, forced_time)
     after = peaks[peaks["tempo_us"].astype(float) > forced_time].copy()
     if after.empty:
         return []
 
-    # Reject tail ripple that is far below the meaningful ringdown amplitude.
-    after["dominance_score"] = _dominance_series(after)
-    min_score = max(0.015 * forced_score, 1e-12)
-    after = after[np.isfinite(after["dominance_score"]) & (after["dominance_score"] >= min_score)].copy()
-    if after.empty:
-        return []
+    # A very soft dominance guard removes baseline clicks/noise but does not
+    # delete the late natural crests. Candidate generation already removed
+    # lower valleys; here we only guard against accidental tiny baseline markers.
+    forced_score = float(_dominance_series(forced_rows).iloc[0]) if len(forced_rows) else float("nan")
+    if np.isfinite(forced_score) and forced_score > 0 and "dominance_score" in after.columns:
+        score = pd.to_numeric(after["dominance_score"], errors="coerce")
+        soft_floor = max(1e-12, 0.003 * forced_score)
+        guarded = after[score.notna() & (score >= soft_floor)].copy()
+        if len(guarded) >= min(n_items, len(after)):
+            after = guarded
 
-    selected: list[int] = []
+    selected = [int(x) for x in after.sort_values("tempo_us").head(n_items)["peak_id"].to_list()]
+    return _sort_peak_ids_by_time(peak_df, selected)
 
-    if np.isfinite(period_us) and period_us > 0:
-        previous_time = forced_time
-        used: set[int] = set()
-        for k in range(1, n_items + 1):
-            expected_time = forced_time + k * period_us
-            # A broad gate allows damping/period drift, but still prevents the
-            # algorithm from choosing random late ripple as the next cycle.
-            left = max(previous_time + 0.40 * period_us, expected_time - 0.48 * period_us)
-            right = expected_time + 0.55 * period_us
-            window = after[
-                (after["tempo_us"].astype(float) >= left)
-                & (after["tempo_us"].astype(float) <= right)
-                & (~after["peak_id"].astype(int).isin(used))
-            ].copy()
 
-            if window.empty:
-                # Fallback: take the next available crest that is separated by
-                # at least part of one period from the previous selection.
-                window = after[
-                    (after["tempo_us"].astype(float) >= previous_time + 0.40 * period_us)
-                    & (~after["peak_id"].astype(int).isin(used))
-                ].sort_values("tempo_us").head(1).copy()
+def per_signal_detection_diagnostic(
+    file_name: str,
+    peak_df: pd.DataFrame,
+    selected_ids: list[int],
+    n_items: int,
+    mode: str,
+) -> dict:
+    """Summarize detection for one waveform so overlay confusion is visible."""
+    forced_id = _forced_peak_id_from_candidates(peak_df)
+    forced_time = float("nan")
+    forced_amp = float("nan")
+    if forced_id is not None and not peak_df.empty:
+        forced_row = peak_df[peak_df["peak_id"].astype(int) == int(forced_id)]
+        if not forced_row.empty:
+            forced_time = float(forced_row.iloc[0]["tempo_us"])
+            forced_amp = float(forced_row.iloc[0]["amplitude"])
 
-            if window.empty:
-                break
+    selected_df = peak_df[peak_df.get("peak_id", pd.Series(dtype=int)).isin(selected_ids)].copy()
+    selected_df = selected_df.sort_values("tempo_us") if not selected_df.empty else selected_df
+    times = [] if selected_df.empty else [f"{float(x):.3f}" for x in selected_df["tempo_us"].to_list()]
+    amps = [] if selected_df.empty else [f"{float(x):.3g}" for x in selected_df["amplitude"].to_list()]
 
-            # Prefer the candidate closest to the predicted cycle time, with a
-            # mild score tie-breaker. This follows the natural oscillation in
-            # time rather than simply grabbing the largest later lobe.
-            window = window.copy()
-            window["time_error"] = np.abs(window["tempo_us"].astype(float) - expected_time)
-            window["rank_value"] = window["time_error"] / max(period_us, 1e-12) - 0.08 * (
-                window["dominance_score"].astype(float) / max(forced_score, 1e-12)
-            )
-            chosen = window.sort_values(["rank_value", "tempo_us"]).iloc[0]
-            peak_id = int(chosen["peak_id"])
-            selected.append(peak_id)
-            used.add(peak_id)
-            previous_time = float(chosen["tempo_us"])
-    else:
-        # If period estimation fails, still use the next upper crests in time.
-        selected = [int(x) for x in after.sort_values("tempo_us").head(n_items)["peak_id"].to_list()]
-
-    return _sort_peak_ids_by_time(peak_df, selected[:n_items])
+    return {
+        "arquivo": file_name,
+        "modo": mode,
+        "N": int(n_items),
+        "ancora_forcada_us": forced_time,
+        "ancora_forcada_amp": forced_amp,
+        "candidatos_do_sinal": int(len(peak_df)),
+        "selecionados": int(len(selected_ids)),
+        "tempos_sel_us": ", ".join(times),
+        "amps_sel": ", ".join(amps),
+    }
 
 
 def auto_select_positive_peak_ids(peak_df: pd.DataFrame, mode: str, n_items: int) -> list[int]:
@@ -977,11 +981,11 @@ def _state_suffix(name: str) -> str:
 
 
 def _peak_selection_key(file_name: str) -> str:
-    return f"envelope_selected_peak_ids_{_state_suffix(file_name)}_v035"
+    return f"envelope_selected_peak_ids_{_state_suffix(file_name)}_v036"
 
 
 def _last_click_key(file_name: str) -> str:
-    return f"envelope_last_click_signature_{_state_suffix(file_name)}_v035"
+    return f"envelope_last_click_signature_{_state_suffix(file_name)}_v036"
 
 
 def selected_peak_ids_for_file(file_name: str) -> list[int]:
@@ -1432,11 +1436,11 @@ def _multi_image_click_version_key() -> str:
 
 
 def _multi_last_click_key() -> str:
-    return "envelope_multi_last_click_signature_v035"
+    return "envelope_multi_last_click_signature_v036"
 
 
 def _auto_selection_signature_key(file_name: str) -> str:
-    return f"envelope_auto_selection_signature_{_state_suffix(file_name)}_v035"
+    return f"envelope_auto_selection_signature_{_state_suffix(file_name)}_v036"
 
 
 def _auto_selection_signature(
@@ -1791,7 +1795,7 @@ def _envelope_peak_cache_key(
     candidate_floor_fraction: float,
 ) -> tuple:
     return (
-        "envelope_peaks_v0322",
+        "envelope_peaks_v0323",
         item.get("data_hash"),
         round(float(start_us), 6),
         round(float(end_us), 6),
@@ -2138,7 +2142,7 @@ def cached_dominant_positive_peaks(
     candidate_floor_fraction: float,
 ) -> tuple[pd.DataFrame, int]:
     """Cache dominant peak detection across click reruns."""
-    cache = st.session_state.setdefault("_envelope_peak_cache_v0322", {})
+    cache = st.session_state.setdefault("_envelope_peak_cache_v0323", {})
     key = _envelope_peak_cache_key(
         item,
         start_us,
@@ -2735,6 +2739,7 @@ with tab_signal:
             raw_peak_count_by_file: dict[str, int] = {}
             selected_by_file: dict[str, list[int]] = {}
             peak_summary_rows = []
+            detection_diagnostic_rows = []
 
             # Keep a compact pool of dominant maxima. This keeps the
             # image selector fast and prevents dozens of tiny late oscillations
@@ -2809,6 +2814,15 @@ with tab_signal:
                         "picos_selecionados": int(len(selected_ids)),
                     }
                 )
+                detection_diagnostic_rows.append(
+                    per_signal_detection_diagnostic(
+                        ring_item["name"],
+                        peak_df,
+                        selected_ids,
+                        int(auto_n),
+                        auto_mode,
+                    )
+                )
 
             action_cols = st.columns([1, 1, 1, 3])
             if action_cols[0].button("Limpar seleção", key="clear_all_peak_selection_v036"):
@@ -2858,6 +2872,13 @@ with tab_signal:
                 f"Total selecionado: {sum(len(v) for v in selected_by_file.values())}"
             )
             action_cols[3].dataframe(pd.DataFrame(peak_summary_rows), width="stretch", height=130)
+
+            with st.expander("Diagnóstico da detecção por arquivo", expanded=True):
+                st.caption(
+                    "Cada linha é calculada isoladamente a partir do respectivo arquivo. "
+                    "A sobreposição no gráfico acontece somente depois da detecção individual."
+                )
+                st.dataframe(pd.DataFrame(detection_diagnostic_rows), width="stretch", height=180)
 
             st.caption(
                 "No gráfico do Envelope a onda completa permanece desenhada. "
