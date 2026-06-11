@@ -32,3 +32,10 @@
 - Kept Envelope, Sinais, Comparação and Potência states independent.
 - Allowed `Select all` in `Arquivos no mesmo eixo` to include all uploaded `.ISF` files.
 - Refined the global color order: orange, blue, green, charcoal, teal, golden brown, magenta, brown, with fallbacks for larger overlays.
+
+## v0.3.16 - Robust Peak Detection
+
+- Improved Envelope peak detection for multi-waveform overlays.
+- Auto-selection now uses an adaptive dominance floor to avoid tiny late ripples/noise.
+- `Últimos N picos` now selects the last N dominant positive maxima, not merely the last visible candidates.
+- Increased the internal candidate pool while keeping the display filtered and readable.

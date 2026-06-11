@@ -1,22 +1,14 @@
-# ISF Analyzer v0.3.15 - Select All Refresh Audit
+# ISF Analyzer v0.3.16 - Robust Peak Detection Audit
 
 ## Scope
+This version focuses only on the Envelope peak-selection algorithm.
 
-This release fixes the remaining file-selection state issue and refines the palette. The validated Envelope workflow was not redesigned.
-
-## Changes verified
-
-- The uploaded file list is global, but each analysis operation now uses independent widget state.
-- Sinais and Envelope remain multi-file operations.
-- Comparação and Potência are explicitly two-file operations.
-- Potência selectboxes no longer affect Envelope file selection.
-- Comparação selectboxes no longer affect Envelope file selection.
-- Adding a new uploaded file updates Sinais and Envelope automatically.
-- Envelope selection is capped at 4 files for usability and performance.
-- Global palette order is orange, blue, green, charcoal, magenta, teal, golden brown and brown.
-- Python syntax compilation passed for `app.py`, `ensaisf/analysis.py` and `ensaisf/isf_parser.py`.
-- No deprecated `use_container_width=True` calls were found.
+## Changes checked
+- Python compilation passed for `app.py` and `ensaisf/*.py`.
+- The full waveform remains visible in Envelope.
+- Only dominant positive maxima are marked as clickable candidates.
+- Automatic selection with `Últimos N picos` now uses an adaptive dominance filter before selecting the last peaks.
+- The candidate pool is larger, but filtered, reducing sensitivity to tiny late ripples and noise when several files are overlaid.
 
 ## Notes
-
-Comparação and Potência are intentionally restricted to two selected files because their calculations are pairwise. Multi-curve visual inspection and multi-envelope comparison should be performed in Sinais and Envelope.
+The Streamlit visual workflow must still be validated in the user's local environment.

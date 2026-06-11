@@ -40,7 +40,7 @@ st.set_page_config(
 )
 
 
-APP_VERSION = "0.3.15-select-all-refresh"
+APP_VERSION = "0.3.16-robust-peak-detection"
 
 
 # Global color order used by all analysis screens.
@@ -443,15 +443,19 @@ def dominant_positive_peak_candidates(
     peak_df: pd.DataFrame,
     max_candidates: int,
     min_separation_us: float,
+    candidate_floor_fraction: float = 0.15,
 ) -> pd.DataFrame:
-    """Keep only the most relevant positive maxima for the Envelope selector.
+    """Keep the dominant positive maxima for the Envelope selector.
 
-    The raw peak detector can return many small late oscillations and noise-like
-    maxima. In the Envelope workflow, the user wants the main positive maxima
-    that define the decay curve. This function ranks positive peaks by amplitude,
-    applies a time-domain non-maximum suppression so only one marker remains
-    around each positive lobe, restores chronological order, and reassigns
-    stable peak IDs for clicking.
+    Robustness goal:
+    - keep the full waveform visible;
+    - show only meaningful positive maxima as clickable candidates;
+    - make "Últimos N picos" mean the last N dominant peaks, not the
+      last N tiny late ripples/noise points.
+
+    The algorithm first filters positive peaks by an adaptive amplitude floor,
+    then applies non-maximum suppression in time, keeping the largest peak in
+    each lobe. The final candidates are returned in chronological order.
     """
     if peak_df.empty:
         return peak_df.copy()
@@ -465,9 +469,31 @@ def dominant_positive_peak_candidates(
 
     max_candidates = max(1, int(max_candidates))
     min_separation_us = max(float(min_separation_us), 0.0)
+    candidate_floor_fraction = float(candidate_floor_fraction)
+    if not np.isfinite(candidate_floor_fraction):
+        candidate_floor_fraction = 0.15
+    candidate_floor_fraction = float(np.clip(candidate_floor_fraction, 0.03, 0.60))
 
+    max_amplitude = float(peaks["dominance_score"].max())
+    if not np.isfinite(max_amplitude) or max_amplitude <= 0:
+        return peaks.head(0).copy()
+
+    # Main filter: remove tiny late ripples. If it becomes too restrictive,
+    # relax once so the user still gets candidates to click manually.
+    floor = max_amplitude * candidate_floor_fraction
+    filtered = peaks[peaks["dominance_score"] >= floor].copy()
+    if len(filtered) < min(2, len(peaks)):
+        relaxed_floor = max_amplitude * max(0.03, candidate_floor_fraction * 0.5)
+        filtered = peaks[peaks["dominance_score"] >= relaxed_floor].copy()
+
+    if filtered.empty:
+        return peaks.head(0).copy()
+
+    # Non-maximum suppression: if several candidates are close in time, keep
+    # the highest one. This avoids several clickable markers around the same
+    # physical lobe.
     selected_rows = []
-    for _, row in peaks.sort_values("dominance_score", ascending=False).iterrows():
+    for _, row in filtered.sort_values("dominance_score", ascending=False).iterrows():
         time_us = float(row["tempo_us"])
         if all(abs(time_us - float(chosen["tempo_us"])) >= min_separation_us for chosen in selected_rows):
             selected_rows.append(row)
@@ -477,10 +503,9 @@ def dominant_positive_peak_candidates(
     if not selected_rows:
         return peaks.head(0).copy()
 
-    peaks = pd.DataFrame(selected_rows).sort_values("tempo_us").reset_index(drop=True)
-    peaks["peak_id"] = np.arange(len(peaks), dtype=int)
-    return peaks
-
+    candidates = pd.DataFrame(selected_rows).sort_values("tempo_us").reset_index(drop=True)
+    candidates["peak_id"] = np.arange(len(candidates), dtype=int)
+    return candidates
 
 def auto_select_positive_peak_ids(peak_df: pd.DataFrame, mode: str, n_items: int) -> list[int]:
     """Build automatic selection using only dominant positive maxima."""
@@ -1611,9 +1636,10 @@ def _envelope_peak_cache_key(
     threshold: float,
     min_distance_us: float,
     candidate_count: int,
+    candidate_floor_fraction: float,
 ) -> tuple:
     return (
-        "envelope_peaks_v037",
+        "envelope_peaks_v0316",
         item.get("data_hash"),
         round(float(start_us), 6),
         round(float(end_us), 6),
@@ -1621,6 +1647,7 @@ def _envelope_peak_cache_key(
         round(float(threshold), 8),
         round(float(min_distance_us), 6),
         int(candidate_count),
+        round(float(candidate_floor_fraction), 6),
     )
 
 
@@ -1632,9 +1659,10 @@ def cached_dominant_positive_peaks(
     threshold: float,
     min_distance_us: float,
     candidate_count: int,
+    candidate_floor_fraction: float,
 ) -> tuple[pd.DataFrame, int]:
     """Cache dominant peak detection across click reruns."""
-    cache = st.session_state.setdefault("_envelope_peak_cache_v037", {})
+    cache = st.session_state.setdefault("_envelope_peak_cache_v0316", {})
     key = _envelope_peak_cache_key(
         item,
         start_us,
@@ -1643,6 +1671,7 @@ def cached_dominant_positive_peaks(
         threshold,
         min_distance_us,
         candidate_count,
+        candidate_floor_fraction,
     )
     if key not in cache:
         raw_peak_df = add_peak_ids(
@@ -1661,6 +1690,7 @@ def cached_dominant_positive_peaks(
             raw_peak_df,
             int(candidate_count),
             min_separation_us=max(float(min_distance_us) * 8.0, float(min_distance_us)),
+            candidate_floor_fraction=candidate_floor_fraction,
         )
         cache[key] = (peak_df.copy(), int(len(raw_peak_df)))
     peak_df, raw_count = cache[key]
@@ -2204,7 +2234,7 @@ with tab_signal:
             help="Quando ativo, aproxima a escala vertical dos picos marcados. Desative para ver toda a onda na janela.",
         )
         auto_cols[4].info(
-            "O gráfico mostra a onda completa. O app marca apenas máximos positivos dominantes, "
+            "O gráfico mostra a onda completa. O app marca máximos positivos dominantes com filtro adaptativo, "
             "seleciona N automaticamente em vermelho e permite ajuste manual por clique."
         )
 
@@ -2239,8 +2269,12 @@ with tab_signal:
             # image selector fast and prevents dozens of tiny late oscillations
             # from cluttering the Envelope workflow. The auto-selected N peaks
             # are chosen from this same candidate pool.
-            candidate_count = max(int(auto_n) + 4, int(auto_n), 8)
-            candidate_count = min(candidate_count, 24)
+            # Keep enough candidates to make "Últimos N picos" robust, even
+            # when many waveforms are overlaid. The adaptive floor below removes
+            # tiny late ripples, so a larger candidate pool does not clutter as much.
+            candidate_count = max(int(auto_n) * 4, int(auto_n) + 8, 16)
+            candidate_count = min(candidate_count, 40)
+            candidate_floor_fraction = max(0.10, min(0.30, float(env_threshold) * 3.0))
 
             for ring_item in selected_items:
                 peak_df, raw_count = cached_dominant_positive_peaks(
@@ -2251,6 +2285,7 @@ with tab_signal:
                     threshold=env_threshold,
                     min_distance_us=env_min_distance,
                     candidate_count=candidate_count,
+                    candidate_floor_fraction=candidate_floor_fraction,
                 )
                 raw_peak_count_by_file[ring_item["name"]] = raw_count
                 peaks_by_file[ring_item["name"]] = peak_df
@@ -2281,7 +2316,7 @@ with tab_signal:
                     {
                         "arquivo": ring_item["name"],
                         "picos_brutos": raw_peak_count_by_file[ring_item["name"]],
-                        "candidatos_visíveis": int(len(peak_df)),
+                        "candidatos_dominantes": int(len(peak_df)),
                         "picos_selecionados": int(len(selected_ids)),
                     }
                 )
