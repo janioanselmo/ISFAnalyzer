@@ -40,21 +40,21 @@ st.set_page_config(
 )
 
 
-APP_VERSION = "0.3.12-color-standardization"
+APP_VERSION = "0.3.13-file-refresh-colors"
 
 
 # Global color order used by all analysis screens.
-# 1st curve: orange, 2nd: blue, 3rd: purple. Additional curves use
-# high-contrast colors while preserving the same file/color mapping across tabs.
+# 1st curve: orange, 2nd: blue. Additional curves use high-contrast,
+# visually distinct colors while preserving the same file/color mapping across tabs.
 SERIES_COLORS_RGB = [
     (230, 126, 34),  # orange
     (0, 109, 204),   # blue
-    (132, 94, 194),  # purple
-    (46, 160, 67),   # green
-    (204, 88, 88),   # muted red
+    (0, 150, 90),    # green
+    (200, 0, 110),   # magenta
     (0, 150, 150),   # teal
-    (188, 99, 27),   # brown/orange
-    (90, 90, 90),    # gray
+    (70, 70, 70),    # dark gray
+    (190, 130, 0),   # golden brown
+    (120, 80, 30),   # brown
 ]
 SERIES_COLORS_HEX = [f"rgb({r},{g},{b})" for r, g, b in SERIES_COLORS_RGB]
 SELECTED_PEAK_COLOR_RGB = (235, 68, 68)
@@ -1917,6 +1917,66 @@ if errors:
 
 if not waveforms:
     st.stop()
+
+
+
+def synchronize_file_dependent_state(file_names: list[str]) -> None:
+    """Keep file-dependent widgets synchronized when uploads change.
+
+    Streamlit preserves widget values by key. When the user uploads an
+    additional ISF file, multiselects can keep the previous file list and the
+    new curve may not appear in Sinais/Envelope until a manual interaction.
+    This synchronizes the relevant widget state before the widgets are drawn.
+    """
+    if not file_names:
+        return
+
+    previous_names = list(st.session_state.get("_loaded_file_names_v0313", []))
+    if previous_names == file_names:
+        return
+
+    added_names = [name for name in file_names if name not in previous_names]
+
+    def _sync_multiselect(key: str, max_items: int | None = None) -> None:
+        current = list(st.session_state.get(key, []))
+        if current:
+            current = [name for name in current if name in file_names]
+            for name in added_names:
+                if name not in current:
+                    current.append(name)
+        else:
+            current = list(file_names)
+        if max_items is not None:
+            current = current[:max_items]
+        st.session_state[key] = current
+
+    def _sync_selectbox(key: str, preferred_index: int = 0) -> None:
+        current = st.session_state.get(key)
+        if current not in file_names:
+            st.session_state[key] = file_names[min(preferred_index, len(file_names) - 1)]
+
+    # Overview and Envelope should immediately include newly uploaded curves.
+    _sync_multiselect("signals_selected_v026", max_items=None)
+    _sync_multiselect("envelope_files_v036", max_items=4)
+
+    # Keep single-choice widgets valid after adding/removing files.
+    _sync_selectbox("signals_metric_file_v026", preferred_index=0)
+    _sync_selectbox("export_waveform_select_v035", preferred_index=0)
+    _sync_selectbox("comparison_before_v026", preferred_index=0)
+    _sync_selectbox("comparison_after_v026", preferred_index=1)
+    _sync_selectbox("power_voltage_v026", preferred_index=0)
+    _sync_selectbox("power_current_v026", preferred_index=1)
+
+    # Force the image-based Envelope plot to be reconstructed with the updated
+    # file list, while preserving valid peak selections for existing files.
+    image_version_key = _multi_image_click_version_key()
+    st.session_state[image_version_key] = int(
+        st.session_state.get(image_version_key, 0)
+    ) + 1
+    st.session_state["_loaded_file_names_v0313"] = list(file_names)
+
+
+synchronize_file_dependent_state([item["name"] for item in waveforms])
 
 tab_signal, tab_export, tab_header = st.tabs(
     [
