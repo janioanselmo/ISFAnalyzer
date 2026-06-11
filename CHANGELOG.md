@@ -1,5 +1,12 @@
 # Changelog
 
+## v0.3.17 - Prominent Peak Detection
+
+- Improved Envelope peak detection for upper-envelope maxima that may appear below the x-axis.
+- Peak candidate selection now combines absolute amplitude and local prominence.
+- Detection uses a smoothed waveform only to locate broad lobes, then maps peaks back to the raw signal.
+- Keeps the full waveform view and the same manual click workflow.
+
 ## v0.3.15 - Isolated per-tab state and palette refinement
 
 - Isolated file-selection state between Sinais, Envelope, Comparação, Potência and Exportação.

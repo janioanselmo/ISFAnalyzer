@@ -294,13 +294,109 @@ def _thin_peaks_by_distance(
     return np.array(sorted(kept), dtype=int)
 
 
+def _local_extrema_prominence(
+    y: np.ndarray,
+    peak_indices: np.ndarray,
+    valley_indices: np.ndarray,
+    kind: str,
+) -> np.ndarray:
+    """Estimate local prominence using nearest opposite extrema.
+
+    The implementation is vectorized with ``searchsorted`` because oscilloscope
+    captures may contain hundreds of thousands of samples and many tiny local
+    extrema. It lets the Envelope workflow detect true local maxima even when
+    their absolute amplitude is below the zero axis.
+    """
+    peak_indices = np.asarray(peak_indices, dtype=int)
+    valley_indices = np.asarray(valley_indices, dtype=int)
+
+    if peak_indices.size == 0:
+        return np.array([], dtype=float)
+    if valley_indices.size == 0:
+        return np.abs(y[peak_indices].astype(float))
+
+    valley_indices = np.sort(valley_indices)
+    positions = np.searchsorted(valley_indices, peak_indices)
+
+    has_left = positions > 0
+    has_right = positions < valley_indices.size
+
+    left_indices = np.full(peak_indices.shape, -1, dtype=int)
+    right_indices = np.full(peak_indices.shape, -1, dtype=int)
+    left_indices[has_left] = valley_indices[positions[has_left] - 1]
+    right_indices[has_right] = valley_indices[positions[has_right]]
+
+    peak_values = y[peak_indices].astype(float)
+    left_values = np.full(peak_indices.shape, np.nan, dtype=float)
+    right_values = np.full(peak_indices.shape, np.nan, dtype=float)
+    left_values[has_left] = y[left_indices[has_left]].astype(float)
+    right_values[has_right] = y[right_indices[has_right]].astype(float)
+
+    if kind == "max":
+        reference = np.nanmax(np.vstack([left_values, right_values]), axis=0)
+        prominence = peak_values - reference
+    else:
+        reference = np.nanmin(np.vstack([left_values, right_values]), axis=0)
+        prominence = reference - peak_values
+
+    fallback = np.abs(peak_values)
+    prominence = np.where(np.isfinite(prominence), prominence, fallback)
+    return np.maximum(prominence, 0.0).astype(float)
+
+
+def _moving_average_for_peak_detection(y: np.ndarray, window_samples: int) -> np.ndarray:
+    """Return a fast centered moving average used only for peak detection."""
+    window_samples = int(window_samples)
+    if window_samples <= 1 or y.size < 5:
+        return y.astype(float, copy=True)
+    window_samples = min(window_samples, max(3, y.size // 5))
+    if window_samples % 2 == 0:
+        window_samples += 1
+    pad = window_samples // 2
+    padded = np.pad(y.astype(float), (pad, pad), mode="edge")
+    csum = np.cumsum(np.insert(padded, 0, 0.0))
+    return (csum[window_samples:] - csum[:-window_samples]) / float(window_samples)
+
+
+def _refine_extrema_to_raw_signal(
+    y: np.ndarray,
+    indices: np.ndarray,
+    search_radius: int,
+    kind: str,
+) -> np.ndarray:
+    """Map extrema found on the smoothed signal back to raw-signal samples."""
+    if indices.size == 0:
+        return indices.astype(int)
+    search_radius = max(1, int(search_radius))
+    refined: list[int] = []
+    n = len(y)
+    for idx in indices.astype(int):
+        left = max(0, idx - search_radius)
+        right = min(n, idx + search_radius + 1)
+        if right <= left:
+            continue
+        segment = y[left:right]
+        if kind == "max":
+            refined.append(left + int(np.nanargmax(segment)))
+        else:
+            refined.append(left + int(np.nanargmin(segment)))
+    return np.array(sorted(set(refined)), dtype=int)
+
+
 def find_ringdown_peaks(
     time_s: np.ndarray,
     value: np.ndarray,
     threshold_fraction: float = 0.05,
     min_peak_distance_us: float = 0.5,
 ) -> PeakSet:
-    """Find positive and negative peaks in a ringdown waveform."""
+    """Find local maxima/minima in a ringdown waveform.
+
+    The detector uses a smoothed copy only to locate the broad lobes, then
+    maps each extremum back to the raw waveform. Maxima are kept when either
+    their raw amplitude is above threshold or their lobe prominence is above
+    threshold. That makes the Envelope workflow robust when relevant upper
+    peaks fall below the x-axis.
+    """
     if len(value) < 3:
         empty = np.array([], dtype=int)
         return PeakSet(empty, empty, empty)
@@ -312,18 +408,49 @@ def find_ringdown_peaks(
         min_distance_samples = max(1, int(round(min_peak_distance_us * 1e-6 / dt)))
 
     abs_peak = float(np.max(np.abs(y)))
-    if abs_peak <= 0:
+    y_range = float(np.nanmax(y) - np.nanmin(y)) if len(y) else 0.0
+    scale = max(abs_peak, 0.5 * y_range)
+    if not np.isfinite(scale) or scale <= 0:
         empty = np.array([], dtype=int)
         return PeakSet(empty, empty, empty)
 
-    threshold = threshold_fraction * abs_peak
-    pos = np.flatnonzero((y[1:-1] > y[:-2]) & (y[1:-1] >= y[2:])) + 1
-    neg = np.flatnonzero((y[1:-1] < y[:-2]) & (y[1:-1] <= y[2:])) + 1
-    pos = pos[y[pos] >= threshold]
-    neg = neg[y[neg] <= -threshold]
+    threshold = threshold_fraction * scale
 
-    pos = _thin_peaks_by_distance(pos, np.abs(y), min_distance_samples)
-    neg = _thin_peaks_by_distance(neg, np.abs(y), min_distance_samples)
+    # Locate broad lobes on a smoothed copy. The raw waveform can contain many
+    # tiny sample-to-sample extrema, especially in ISF captures with ~1 ns
+    # sampling. A small moving average makes the maxima correspond better to
+    # the visible oscillation lobes.
+    smooth_window = max(3, min(2001, min_distance_samples // 8))
+    if smooth_window % 2 == 0:
+        smooth_window += 1
+    y_detect = _moving_average_for_peak_detection(y, smooth_window)
+
+    pos_detect = np.flatnonzero((y_detect[1:-1] > y_detect[:-2]) & (y_detect[1:-1] >= y_detect[2:])) + 1
+    neg_detect = np.flatnonzero((y_detect[1:-1] < y_detect[:-2]) & (y_detect[1:-1] <= y_detect[2:])) + 1
+
+    refine_radius = max(1, min_distance_samples // 3)
+    pos_all = _refine_extrema_to_raw_signal(y, pos_detect, refine_radius, kind="max")
+    neg_all = _refine_extrema_to_raw_signal(y, neg_detect, refine_radius, kind="min")
+
+    pos_prominence = _local_extrema_prominence(y, pos_all, neg_all, kind="max")
+    neg_prominence = _local_extrema_prominence(y, neg_all, pos_all, kind="min")
+
+    pos_mask = (y[pos_all] >= threshold) | (pos_prominence >= threshold)
+    neg_mask = (y[neg_all] <= -threshold) | (neg_prominence >= threshold)
+    pos = pos_all[pos_mask]
+    neg = neg_all[neg_mask]
+
+    pos_score = np.abs(y).astype(float)
+    neg_score = np.abs(y).astype(float)
+    if pos_all.size:
+        pos_score = pos_score.copy()
+        pos_score[pos_all] = np.maximum(pos_score[pos_all], pos_prominence)
+    if neg_all.size:
+        neg_score = neg_score.copy()
+        neg_score[neg_all] = np.maximum(neg_score[neg_all], neg_prominence)
+
+    pos = _thin_peaks_by_distance(pos, pos_score, min_distance_samples)
+    neg = _thin_peaks_by_distance(neg, neg_score, min_distance_samples)
     all_extrema = np.array(sorted(np.concatenate([pos, neg])), dtype=int)
     return PeakSet(pos, neg, all_extrema)
 
@@ -681,15 +808,39 @@ def ringdown_peak_table(
         threshold_fraction=peak_threshold_fraction,
         min_peak_distance_us=min_peak_distance_us,
     )
+    pos_prominence_all = _local_extrema_prominence(
+        y_win, peaks.positive_indices, peaks.negative_indices, kind="max"
+    )
+    neg_prominence_all = _local_extrema_prominence(
+        y_win, peaks.negative_indices, peaks.positive_indices, kind="min"
+    )
+    pos_prominence_map = {
+        int(idx): float(prom) for idx, prom in zip(peaks.positive_indices, pos_prominence_all)
+    }
+    neg_prominence_map = {
+        int(idx): float(prom) for idx, prom in zip(peaks.negative_indices, neg_prominence_all)
+    }
+
     rows = []
     for idx in peaks.positive_indices:
-        rows.append({"tipo": "positivo", "tempo_us": t_win[idx] * 1e6, "amplitude": y_win[idx]})
+        rows.append({
+            "tipo": "positivo",
+            "tempo_us": t_win[idx] * 1e6,
+            "amplitude": y_win[idx],
+            "prominence": pos_prominence_map.get(int(idx), abs(float(y_win[idx]))),
+        })
     for idx in peaks.negative_indices:
-        rows.append({"tipo": "negativo", "tempo_us": t_win[idx] * 1e6, "amplitude": y_win[idx]})
+        rows.append({
+            "tipo": "negativo",
+            "tempo_us": t_win[idx] * 1e6,
+            "amplitude": y_win[idx],
+            "prominence": neg_prominence_map.get(int(idx), abs(float(y_win[idx]))),
+        })
     df = pd.DataFrame(rows)
     if not df.empty:
         df = df.sort_values("tempo_us").reset_index(drop=True)
         df["abs_amplitude"] = np.abs(df["amplitude"])
+        df["dominance_score"] = np.maximum(df["abs_amplitude"], df["prominence"].astype(float))
     return df
 
 

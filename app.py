@@ -40,7 +40,7 @@ st.set_page_config(
 )
 
 
-APP_VERSION = "0.3.16-robust-peak-detection"
+APP_VERSION = "0.3.17-prominent-peak-detection"
 
 
 # Global color order used by all analysis screens.
@@ -426,13 +426,31 @@ def _last_n_extrema_ids(peak_df: pd.DataFrame, kind: str, n_items: int) -> list[
     return [int(x) for x in filtered.sort_values("tempo_us").tail(int(n_items))["peak_id"].to_list()]
 
 
+def _dominance_series(peaks: pd.DataFrame) -> pd.Series:
+    """Return a robust score for choosing relevant maxima.
+
+    The raw amplitude alone fails when a local maximum lies below the zero
+    axis. The prominence column, when available, captures how much the peak
+    rises above its neighboring valleys, so it remains valid even for peaks
+    with negative absolute voltage.
+    """
+    if peaks.empty:
+        return pd.Series(dtype=float)
+    if "prominence" in peaks.columns:
+        prominence = peaks["prominence"].astype(float).abs()
+    else:
+        prominence = pd.Series(np.zeros(len(peaks)), index=peaks.index, dtype=float)
+    amplitude = peaks["amplitude"].astype(float).abs()
+    return np.maximum(amplitude, prominence)
+
+
 def _largest_n_extrema_ids(peak_df: pd.DataFrame, n_items: int) -> list[int]:
-    """Return N extrema IDs with largest positive amplitude, sorted by time."""
+    """Return N maxima with largest robust dominance score, sorted by time."""
     if peak_df.empty:
         return []
     peaks = peak_df.copy()
-    peaks["dominance_score"] = peaks["amplitude"].astype(float)
-    peaks = peaks[np.isfinite(peaks["dominance_score"])]
+    peaks["dominance_score"] = _dominance_series(peaks)
+    peaks = peaks[np.isfinite(peaks["dominance_score"]) & (peaks["dominance_score"] > 0)]
     if peaks.empty:
         return []
     selected = peaks.sort_values("dominance_score", ascending=False).head(int(n_items))
@@ -445,25 +463,19 @@ def dominant_positive_peak_candidates(
     min_separation_us: float,
     candidate_floor_fraction: float = 0.15,
 ) -> pd.DataFrame:
-    """Keep the dominant positive maxima for the Envelope selector.
+    """Keep dominant local maxima for the Envelope selector.
 
-    Robustness goal:
-    - keep the full waveform visible;
-    - show only meaningful positive maxima as clickable candidates;
-    - make "Últimos N picos" mean the last N dominant peaks, not the
-      last N tiny late ripples/noise points.
-
-    The algorithm first filters positive peaks by an adaptive amplitude floor,
-    then applies non-maximum suppression in time, keeping the largest peak in
-    each lobe. The final candidates are returned in chronological order.
+    A maximum does not need to be above the zero axis. This is important for
+    late ringing, where a shifted centerline can make a real upper-envelope
+    peak appear below 0 V. The dominant score therefore combines absolute
+    amplitude and local prominence.
     """
     if peak_df.empty:
         return peak_df.copy()
 
     peaks = peak_df[peak_df["tipo"] == "positivo"].copy()
-    peaks["dominance_score"] = peaks["amplitude"].astype(float)
-    peaks = peaks[np.isfinite(peaks["dominance_score"])]
-    peaks = peaks[peaks["dominance_score"] > 0]
+    peaks["dominance_score"] = _dominance_series(peaks)
+    peaks = peaks[np.isfinite(peaks["dominance_score"]) & (peaks["dominance_score"] > 0)]
     if peaks.empty:
         return peaks
 
@@ -474,24 +486,19 @@ def dominant_positive_peak_candidates(
         candidate_floor_fraction = 0.15
     candidate_floor_fraction = float(np.clip(candidate_floor_fraction, 0.03, 0.60))
 
-    max_amplitude = float(peaks["dominance_score"].max())
-    if not np.isfinite(max_amplitude) or max_amplitude <= 0:
+    max_score = float(peaks["dominance_score"].max())
+    if not np.isfinite(max_score) or max_score <= 0:
         return peaks.head(0).copy()
 
-    # Main filter: remove tiny late ripples. If it becomes too restrictive,
-    # relax once so the user still gets candidates to click manually.
-    floor = max_amplitude * candidate_floor_fraction
+    floor = max_score * candidate_floor_fraction
     filtered = peaks[peaks["dominance_score"] >= floor].copy()
     if len(filtered) < min(2, len(peaks)):
-        relaxed_floor = max_amplitude * max(0.03, candidate_floor_fraction * 0.5)
+        relaxed_floor = max_score * max(0.03, candidate_floor_fraction * 0.5)
         filtered = peaks[peaks["dominance_score"] >= relaxed_floor].copy()
 
     if filtered.empty:
         return peaks.head(0).copy()
 
-    # Non-maximum suppression: if several candidates are close in time, keep
-    # the highest one. This avoids several clickable markers around the same
-    # physical lobe.
     selected_rows = []
     for _, row in filtered.sort_values("dominance_score", ascending=False).iterrows():
         time_us = float(row["tempo_us"])
@@ -1639,7 +1646,7 @@ def _envelope_peak_cache_key(
     candidate_floor_fraction: float,
 ) -> tuple:
     return (
-        "envelope_peaks_v0316",
+        "envelope_peaks_v0317",
         item.get("data_hash"),
         round(float(start_us), 6),
         round(float(end_us), 6),
@@ -1662,7 +1669,7 @@ def cached_dominant_positive_peaks(
     candidate_floor_fraction: float,
 ) -> tuple[pd.DataFrame, int]:
     """Cache dominant peak detection across click reruns."""
-    cache = st.session_state.setdefault("_envelope_peak_cache_v0316", {})
+    cache = st.session_state.setdefault("_envelope_peak_cache_v0317", {})
     key = _envelope_peak_cache_key(
         item,
         start_us,
@@ -2151,7 +2158,7 @@ with tab_signal:
         st.subheader("Envelope")
         st.caption(
             "No modo Envelope, o gráfico mantém a onda completa no mesmo eixo, "
-            "mas marca somente os picos máximos positivos. Clique nos círculos para selecionar os picos usados na envoltória."
+            "mas marca somente os máximos dominantes. Clique nos círculos para selecionar os picos usados na envoltória."
         )
 
         st.markdown("**1) Arquivos e janela de análise**")
@@ -2218,7 +2225,7 @@ with tab_signal:
             value=4,
             step=1,
             key="envelope_auto_n_v036",
-            help="Quantidade de picos máximos positivos usados no ajuste. Com 1 pico não há ajuste exponencial; use 2 ou mais.",
+            help="Quantidade de máximos dominantes usados no ajuste. Com 1 pico não há ajuste exponencial; use 2 ou mais.",
         )
         auto_mode = auto_cols[2].selectbox(
             "Critério",
@@ -2234,7 +2241,7 @@ with tab_signal:
             help="Quando ativo, aproxima a escala vertical dos picos marcados. Desative para ver toda a onda na janela.",
         )
         auto_cols[4].info(
-            "O gráfico mostra a onda completa. O app marca máximos positivos dominantes com filtro adaptativo, "
+            "O gráfico mostra a onda completa. O app marca máximos dominantes com filtro adaptativo de proeminência, "
             "seleciona N automaticamente em vermelho e permite ajuste manual por clique."
         )
 
@@ -2265,7 +2272,7 @@ with tab_signal:
             selected_by_file: dict[str, list[int]] = {}
             peak_summary_rows = []
 
-            # Keep a compact pool of dominant positive maxima. This keeps the
+            # Keep a compact pool of dominant maxima. This keeps the
             # image selector fast and prevents dozens of tiny late oscillations
             # from cluttering the Envelope workflow. The auto-selected N peaks
             # are chosen from this same candidate pool.
@@ -2372,13 +2379,13 @@ with tab_signal:
 
             st.caption(
                 "No gráfico do Envelope a onda completa permanece desenhada. "
-                "As marcações aparecem somente nos máximos positivos dominantes; vermelho indica os picos usados no ajuste."
+                "As marcações aparecem somente nos máximos dominantes; vermelho indica os picos usados no ajuste."
             )
 
             if any(df.empty for df in peaks_by_file.values()):
                 empty_names = [name for name, df in peaks_by_file.items() if df.empty]
                 st.warning(
-                    "Sem picos máximos positivos detectados em: " + ", ".join(empty_names) +
+                    "Sem máximos dominantes detectados em: " + ", ".join(empty_names) +
                     ". Ajuste a janela, reduza o limiar ou diminua a distância mínima."
                 )
 
