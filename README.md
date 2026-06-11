@@ -15,18 +15,20 @@ On Windows, you can also run:
 run_windows.bat
 ```
 
-## v0.3.13 file refresh and color refinement
+## v0.3.14 isolated state and palette refinement
 
-This package keeps the validated Envelope workflow and fixes the final upload-refresh issue:
+This package keeps the validated Envelope workflow and fixes the remaining per-tab state issue:
 
-- Internal app version updated to `0.3.13-file-refresh-colors`.
-- When a new `.ISF` file is uploaded, file-dependent widgets are synchronized automatically.
-- New files are immediately added to **Sinais** and **Envelope** selections.
-- Single-choice controls in **Comparação**, **Potência** and **Exportação** are kept valid after adding/removing files.
-- Envelope image-click plot is forced to refresh when the uploaded file list changes.
+- Internal app version updated to `0.3.14-isolated-state`.
+- File uploads remain global, but each analysis operation now has independent file-selection state.
+- **Sinais** can show one or multiple uploaded files.
+- **Envelope** can show 1 to 4 files in the same axis and keeps its own selection when switching tabs.
+- **Comparação** is intentionally limited to exactly two selections: reference versus compared.
+- **Potência** is intentionally limited to exactly two selections: voltage channel and current channel.
+- Adding a new `.ISF` file automatically synchronizes Sinais and Envelope without being overwritten by Comparação or Potência.
+- The Envelope image-click plot is rebuilt only after real upload changes, preserving valid peak selections.
 - Global color order remains standardized across **Sinais**, **Envelope**, **Comparação** and **Potência**.
-- Default color order: 1st curve orange, 2nd curve blue, then green, magenta, teal and other high-contrast colors.
-- The purple third curve was removed from the default palette.
+- Default color order: 1st curve orange, 2nd curve blue, then green, charcoal, magenta, teal, golden brown and brown.
 - Verified Streamlit calls use `width="stretch"` rather than deprecated `use_container_width=True`.
 - Verified the app name remains **ISF Analyzer**.
 - Verified Envelope defaults: start = -100 µs, end = 500 µs, 4 peaks per curve, criterion = **Últimos N picos**.

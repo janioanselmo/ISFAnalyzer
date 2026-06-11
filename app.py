@@ -40,21 +40,21 @@ st.set_page_config(
 )
 
 
-APP_VERSION = "0.3.13-file-refresh-colors"
+APP_VERSION = "0.3.14-isolated-state"
 
 
 # Global color order used by all analysis screens.
 # 1st curve: orange, 2nd: blue. Additional curves use high-contrast,
 # visually distinct colors while preserving the same file/color mapping across tabs.
 SERIES_COLORS_RGB = [
-    (230, 126, 34),  # orange
-    (0, 109, 204),   # blue
-    (0, 150, 90),    # green
-    (200, 0, 110),   # magenta
-    (0, 150, 150),   # teal
-    (70, 70, 70),    # dark gray
-    (190, 130, 0),   # golden brown
-    (120, 80, 30),   # brown
+    (230, 126, 34),  # orange - first curve
+    (0, 109, 204),   # blue - second curve
+    (0, 150, 90),    # green - third curve
+    (45, 45, 45),    # charcoal - fourth curve
+    (210, 0, 125),   # magenta - fifth curve
+    (0, 155, 170),   # teal - sixth curve
+    (190, 135, 0),   # golden brown - seventh curve
+    (120, 80, 30),   # brown - eighth curve
 ]
 SERIES_COLORS_HEX = [f"rgb({r},{g},{b})" for r, g, b in SERIES_COLORS_RGB]
 SELECTED_PEAK_COLOR_RGB = (235, 68, 68)
@@ -1921,33 +1921,41 @@ if not waveforms:
 
 
 def synchronize_file_dependent_state(file_names: list[str]) -> None:
-    """Keep file-dependent widgets synchronized when uploads change.
+    """Synchronize file-dependent widgets without sharing state between tabs.
 
-    Streamlit preserves widget values by key. When the user uploads an
-    additional ISF file, multiselects can keep the previous file list and the
-    new curve may not appear in Sinais/Envelope until a manual interaction.
-    This synchronizes the relevant widget state before the widgets are drawn.
+    The uploaded file list is global, but each analysis screen must keep its
+    own independent selection. In particular, Potência and Comparação are
+    two-file workflows and must never reduce the Envelope selection.
     """
     if not file_names:
         return
 
-    previous_names = list(st.session_state.get("_loaded_file_names_v0313", []))
-    if previous_names == file_names:
-        return
-
+    previous_names = list(st.session_state.get("_loaded_file_names_v0314", []))
+    upload_changed = previous_names != file_names
     added_names = [name for name in file_names if name not in previous_names]
 
-    def _sync_multiselect(key: str, max_items: int | None = None) -> None:
-        current = list(st.session_state.get(key, []))
-        if current:
-            current = [name for name in current if name in file_names]
+    def _sync_multiselect(
+        key: str,
+        *,
+        max_items: int | None = None,
+        include_new_files: bool = False,
+        default_to_all: bool = True,
+    ) -> None:
+        raw_value = st.session_state.get(key)
+        current = raw_value if isinstance(raw_value, list) else []
+        current = [name for name in current if name in file_names]
+
+        if include_new_files and upload_changed:
             for name in added_names:
                 if name not in current:
                     current.append(name)
-        else:
+
+        if not current and (key not in st.session_state or upload_changed) and default_to_all:
             current = list(file_names)
+
         if max_items is not None:
             current = current[:max_items]
+
         st.session_state[key] = current
 
     def _sync_selectbox(key: str, preferred_index: int = 0) -> None:
@@ -1955,25 +1963,35 @@ def synchronize_file_dependent_state(file_names: list[str]) -> None:
         if current not in file_names:
             st.session_state[key] = file_names[min(preferred_index, len(file_names) - 1)]
 
-    # Overview and Envelope should immediately include newly uploaded curves.
-    _sync_multiselect("signals_selected_v026", max_items=None)
-    _sync_multiselect("envelope_files_v036", max_items=4)
+    # Independent per-screen selections.
+    _sync_multiselect(
+        "signals_selected_v0314",
+        max_items=None,
+        include_new_files=True,
+        default_to_all=True,
+    )
+    _sync_multiselect(
+        "envelope_files_v0314",
+        max_items=4,
+        include_new_files=True,
+        default_to_all=True,
+    )
 
-    # Keep single-choice widgets valid after adding/removing files.
-    _sync_selectbox("signals_metric_file_v026", preferred_index=0)
-    _sync_selectbox("export_waveform_select_v035", preferred_index=0)
-    _sync_selectbox("comparison_before_v026", preferred_index=0)
-    _sync_selectbox("comparison_after_v026", preferred_index=1)
-    _sync_selectbox("power_voltage_v026", preferred_index=0)
-    _sync_selectbox("power_current_v026", preferred_index=1)
+    # Single-choice widgets remain valid, but they do not modify multiselects.
+    _sync_selectbox("signals_metric_file_v0314", preferred_index=0)
+    _sync_selectbox("export_waveform_select_v0314", preferred_index=0)
+    _sync_selectbox("comparison_before_v0314", preferred_index=0)
+    _sync_selectbox("comparison_after_v0314", preferred_index=1)
+    _sync_selectbox("power_voltage_v0314", preferred_index=0)
+    _sync_selectbox("power_current_v0314", preferred_index=1)
 
-    # Force the image-based Envelope plot to be reconstructed with the updated
-    # file list, while preserving valid peak selections for existing files.
-    image_version_key = _multi_image_click_version_key()
-    st.session_state[image_version_key] = int(
-        st.session_state.get(image_version_key, 0)
-    ) + 1
-    st.session_state["_loaded_file_names_v0313"] = list(file_names)
+    if upload_changed:
+        # Rebuild only the Envelope image component after real upload changes.
+        image_version_key = _multi_image_click_version_key()
+        st.session_state[image_version_key] = int(
+            st.session_state.get(image_version_key, 0)
+        ) + 1
+        st.session_state["_loaded_file_names_v0314"] = list(file_names)
 
 
 synchronize_file_dependent_state([item["name"] for item in waveforms])
@@ -2028,8 +2046,8 @@ with tab_signal:
         selected_names = control_cols[0].multiselect(
             "Arquivos",
             [item["name"] for item in waveforms],
-            default=[item["name"] for item in waveforms[: min(4, len(waveforms))]],
-            key="signals_selected_v026",
+            default=list(st.session_state.get("signals_selected_v0314", [item["name"] for item in waveforms])),
+            key="signals_selected_v0314",
         )
         normalize = control_cols[1].checkbox(
             "Normalizar",
@@ -2084,7 +2102,7 @@ with tab_signal:
         selected_metric_name = st.selectbox(
             "Resumo do arquivo",
             [item["name"] for item in waveforms],
-            key="signals_metric_file_v026",
+            key="signals_metric_file_v0314",
         )
         selected_metrics = next(row for row in metrics if row["arquivo"] == selected_metric_name)
         cols = st.columns(5)
@@ -2106,12 +2124,13 @@ with tab_signal:
 
         st.markdown("**1) Arquivos e janela de análise**")
         file_names = [item["name"] for item in waveforms]
-        default_files = file_names[: min(2, len(file_names))]
+        default_files = list(st.session_state.get("envelope_files_v0314", file_names[: min(4, len(file_names))]))
+        default_files = [name for name in default_files if name in file_names][:4]
         env_selected_names = st.multiselect(
             "Arquivos no mesmo eixo",
             file_names,
             default=default_files,
-            key="envelope_files_v036",
+            key="envelope_files_v0314",
             help="Selecione até 4 arquivos para manter a leitura visual rápida e clara.",
         )
         if len(env_selected_names) > 4:
@@ -2434,7 +2453,10 @@ with tab_signal:
 
     elif analysis_mode == "Comparação":
         st.subheader("Comparação")
-        st.caption("Comparação antes × depois dentro da janela de ringing selecionada.")
+        st.caption(
+            "Comparação direta entre exatamente 2 arquivos: Referência × Comparado. "
+            "Esta seleção é independente da aba Envelope."
+        )
         ring_cols = st.columns(2)
         cmp_start_us = ring_cols[0].number_input(
             "Início da janela (µs)",
@@ -2458,14 +2480,16 @@ with tab_signal:
                 "Antes",
                 [item["name"] for item in waveforms],
                 index=0,
-                key="comparison_before_v026",
+                key="comparison_before_v0314",
             )
             after_name = col_ba_2.selectbox(
                 "Depois",
                 [item["name"] for item in waveforms],
                 index=min(1, len(waveforms) - 1),
-                key="comparison_after_v026",
+                key="comparison_after_v0314",
             )
+            if before_name == after_name:
+                st.warning("Selecione dois arquivos diferentes para uma comparação física útil.")
             before_item = next(item for item in waveforms if item["name"] == before_name)
             after_item = next(item for item in waveforms if item["name"] == after_name)
             before_ring = ringdown_metrics(
@@ -2545,7 +2569,10 @@ with tab_signal:
 
     elif analysis_mode == "Potência":
         st.subheader("Potência")
-        st.caption("Use quando houver um canal de tensão e um canal de corrente, ou corrente escalada por probe/shunt.")
+        st.caption(
+            "Use exatamente 2 arquivos: um canal de tensão e um canal de corrente. "
+            "Esta seleção é independente das demais abas."
+        )
 
         if len(waveforms) < 2:
             st.warning("Carregue pelo menos dois arquivos: um canal de tensão e um canal de corrente.")
@@ -2555,14 +2582,16 @@ with tab_signal:
                 "Tensão",
                 [item["name"] for item in waveforms],
                 index=0,
-                key="power_voltage_v026",
+                key="power_voltage_v0314",
             )
             current_name = col2.selectbox(
                 "Corrente",
                 [item["name"] for item in waveforms],
                 index=min(1, len(waveforms) - 1),
-                key="power_current_v026",
+                key="power_current_v0314",
             )
+            if voltage_name == current_name:
+                st.warning("Selecione canais diferentes para tensão e corrente antes de interpretar P(t)=V(t)I(t).")
             current_scale = col3.number_input(
                 "Escala de corrente (A/unidade)",
                 min_value=1e-12,
@@ -2687,7 +2716,7 @@ with tab_export:
     export_name = st.selectbox(
         "Exportar forma de onda",
         [item["name"] for item in waveforms],
-        key="export_waveform_select_v035",
+        key="export_waveform_select_v0314",
     )
     export_item = next(item for item in waveforms if item["name"] == export_name)
 
