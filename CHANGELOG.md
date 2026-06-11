@@ -1,5 +1,20 @@
 # Changelog
 
+## v0.3.12 - Color standardization
+
+- Standardized the global color palette across Sinais, Envelope, Comparação and Potência.
+- Set the default visual order to orange, blue and purple for the first three curves.
+- Added additional high-contrast colors for extra curves.
+- Preserved each uploaded file's assigned color across operation changes whenever possible.
+- Kept the validated Envelope workflow unchanged.
+
+## v0.3.11 — Envelope legend fix
+
+- Moveu a legenda das curvas do seletor de Envelope para dentro da área do gráfico.
+- Removeu a faixa superior dedicada à legenda para evitar sobreposição de textos.
+- Atualizou a chave do componente clicável para forçar a remontagem visual após a correção.
+
+
 ## v0.3.9 - Final audit release candidate
 
 - Updated internal app version to `0.3.9-final-audit`.

@@ -15,11 +15,14 @@ On Windows, you can also run:
 run_windows.bat
 ```
 
-## v0.3.9 final audit
+## v0.3.12 color standardization
 
-This release-candidate package keeps the validated Envelope workflow and applies final audit fixes:
+This package keeps the validated Envelope workflow and standardizes the color mapping across all analysis operations:
 
-- Internal app version updated to `0.3.9-final-audit`.
+- Internal app version updated to `0.3.12-color-standardization`.
+- Global curve palette standardized across **Sinais**, **Envelope**, **Comparação** and **Potência**.
+- Default color order: 1st curve orange, 2nd curve blue, 3rd curve purple, then high-contrast distinct colors.
+- Each uploaded file receives a stable color mapping so the same file keeps the same visual identity across operation changes.
 - Removed generated `__pycache__` files from the distribution package.
 - Removed a duplicated `st.rerun()` in the Envelope click-selection path.
 - Verified Streamlit calls use `width="stretch"` rather than deprecated `use_container_width=True`.

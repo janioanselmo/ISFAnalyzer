@@ -40,15 +40,21 @@ st.set_page_config(
 )
 
 
-APP_VERSION = "0.3.10-envelope-restore-fix"
+APP_VERSION = "0.3.12-color-standardization"
 
 
+# Global color order used by all analysis screens.
+# 1st curve: orange, 2nd: blue, 3rd: purple. Additional curves use
+# high-contrast colors while preserving the same file/color mapping across tabs.
 SERIES_COLORS_RGB = [
-    (0, 109, 204),
-    (230, 126, 34),
-    (46, 160, 67),
-    (132, 94, 194),
-    (204, 88, 88),
+    (230, 126, 34),  # orange
+    (0, 109, 204),   # blue
+    (132, 94, 194),  # purple
+    (46, 160, 67),   # green
+    (204, 88, 88),   # muted red
+    (0, 150, 150),   # teal
+    (188, 99, 27),   # brown/orange
+    (90, 90, 90),    # gray
 ]
 SERIES_COLORS_HEX = [f"rgb({r},{g},{b})" for r, g, b in SERIES_COLORS_RGB]
 SELECTED_PEAK_COLOR_RGB = (235, 68, 68)
@@ -100,7 +106,8 @@ def plot_waveforms(
 ):
     fig = go.Figure()
 
-    for item in waveforms:
+    for idx, item in enumerate(waveforms):
+        color = item.get("series_color_hex", SERIES_COLORS_HEX[idx % len(SERIES_COLORS_HEX)])
         t = item["time_s"]
         y = item["value"].astype(float)
 
@@ -125,6 +132,7 @@ def plot_waveforms(
                 y=y_plot,
                 mode="lines",
                 name=item["name"],
+                line=dict(color=color),
             )
         )
 
@@ -173,6 +181,7 @@ def plot_ringdown(
                 y=y_plot,
                 mode="lines",
                 name="sinal corrigido",
+                line=dict(color=SERIES_COLORS_HEX[0]),
             )
         )
 
@@ -185,7 +194,7 @@ def plot_ringdown(
                 y=pos["amplitude"],
                 mode="markers",
                 name="picos positivos",
-                marker=dict(size=8, symbol="circle"),
+                marker=dict(size=8, symbol="circle", color=SERIES_COLORS_HEX[0]),
             )
         )
         fig.add_trace(
@@ -194,7 +203,7 @@ def plot_ringdown(
                 y=neg["amplitude"],
                 mode="markers",
                 name="picos negativos",
-                marker=dict(size=8, symbol="x"),
+                marker=dict(size=8, symbol="x", color=SERIES_COLORS_HEX[1]),
             )
         )
 
@@ -759,7 +768,7 @@ def plot_envelope_comparison(envelope_df: pd.DataFrame, normalize: bool = True):
             duration = row["tau_us"] * 3.0
         x_us = np.linspace(0.0, duration, 500)
         y = np.exp(-x_us / row["tau_us"]) if normalize else row["a0"] * np.exp(-x_us / row["tau_us"])
-        color = SERIES_COLORS_HEX[idx % len(SERIES_COLORS_HEX)]
+        color = row.get("series_color", SERIES_COLORS_HEX[idx % len(SERIES_COLORS_HEX)])
         fig.add_trace(
             go.Scatter(
                 x=x_us,
@@ -911,7 +920,7 @@ def plot_envelope_context_graph(
                 y=y_plot,
                 mode="lines",
                 name="sinal na janela",
-                line=dict(width=1.5),
+                line=dict(width=1.5, color=SERIES_COLORS_HEX[0]),
                 hoverinfo="skip",
             )
         )
@@ -928,7 +937,7 @@ def plot_envelope_context_graph(
                     mode="markers",
                     name="clique para selecionar",
                     customdata=unselected["peak_id"].astype(int).tolist(),
-                    marker=dict(size=17, symbol="circle-open", line=dict(width=2)),
+                    marker=dict(size=17, symbol="circle-open", color=SERIES_COLORS_HEX[0], line=dict(width=2, color=SERIES_COLORS_HEX[0])),
                     hovertemplate=(
                         "Pico %{customdata}<br>"
                         "Tempo: %{x:.3f} µs<br>"
@@ -944,7 +953,7 @@ def plot_envelope_context_graph(
                     mode="markers",
                     name="selecionados",
                     customdata=selected["peak_id"].astype(int).tolist(),
-                    marker=dict(size=23, symbol="diamond-open", line=dict(width=3)),
+                    marker=dict(size=23, symbol="diamond-open", color="rgb(235,68,68)", line=dict(width=3, color="rgb(235,68,68)")),
                     hovertemplate=(
                         "Selecionado %{customdata}<br>"
                         "Tempo: %{x:.3f} µs<br>"
@@ -997,7 +1006,7 @@ def plot_peak_selection_graph(
                     mode="markers",
                     name="clique para selecionar",
                     customdata=unselected["peak_id"].astype(int).tolist(),
-                    marker=dict(size=18, symbol="circle-open", line=dict(width=2)),
+                    marker=dict(size=18, symbol="circle-open", color=SERIES_COLORS_HEX[0], line=dict(width=2, color=SERIES_COLORS_HEX[0])),
                 )
             )
         if not selected.empty:
@@ -1008,7 +1017,7 @@ def plot_peak_selection_graph(
                     mode="markers",
                     name="selecionados",
                     customdata=selected["peak_id"].astype(int).tolist(),
-                    marker=dict(size=24, symbol="diamond-open", line=dict(width=3)),
+                    marker=dict(size=24, symbol="diamond-open", color="rgb(235,68,68)", line=dict(width=3, color="rgb(235,68,68)")),
                 )
             )
 
@@ -1063,6 +1072,15 @@ def _draw_text(draw: ImageDraw.ImageDraw, position: tuple[int, int], text: str, 
     except Exception:
         font = None
     draw.text(position, text, fill=fill, font=font)
+
+
+def _text_size(draw: ImageDraw.ImageDraw, text: str) -> tuple[int, int]:
+    try:
+        font = ImageFont.load_default()
+        bbox = draw.textbbox((0, 0), text, font=font)
+        return int(bbox[2] - bbox[0]), int(bbox[3] - bbox[1])
+    except Exception:
+        return max(6 * len(text), 1), 12
 
 
 def build_clickable_waveform_image(
@@ -1231,7 +1249,7 @@ def _image_click_version_key(file_name: str) -> str:
 
 
 def _multi_image_click_version_key() -> str:
-    return "envelope_multi_image_click_version_v035"
+    return "envelope_multi_image_click_version_v0311"
 
 
 def _multi_last_click_key() -> str:
@@ -1344,10 +1362,10 @@ def build_multi_clickable_waveform_image(
 
     img = Image.new("RGB", (image_width, image_height), "white")
     draw = ImageDraw.Draw(img)
-    # Keep a compact, dedicated legend band above the plot. Do not draw a
-    # long title inside the image: Streamlit already labels the section and
-    # PIL's default font can mangle accented text.
-    left, top, right, bottom = 96, 76, image_width - 38, image_height - 72
+    # The plot area starts near the top. Curve legends are drawn inside the
+    # graph, matching the Plotly envelope-comparison chart and avoiding label
+    # overlap above the figure.
+    left, top, right, bottom = 96, 32, image_width - 38, image_height - 72
     plot_box = (left, top, right, bottom)
 
     grid_color = (225, 230, 236)
@@ -1376,21 +1394,9 @@ def build_multi_clickable_waveform_image(
 
     peak_pixels: dict[tuple[str, int], tuple[float, float]] = {}
 
-    legend_item_width = max(310, (right - left) // 2)
-    legend_x = left
-    legend_y = 18
-    legend_row_height = 24
     for idx, (item, t_win, y_win) in enumerate(waveform_cache):
         name = item["name"]
-        color = palette[idx % len(palette)]
-        col = idx % 2
-        row = idx // 2
-        lx = legend_x + col * legend_item_width
-        ly = legend_y + row * legend_row_height
-        draw.line([(lx, ly + 9), (lx + 26, ly + 9)], fill=color, width=3)
-        draw.ellipse([lx + 10, ly + 4, lx + 20, ly + 14], fill="white", outline=color, width=3)
-        _draw_text(draw, (lx + 34, ly), name[:42])
-
+        color = item.get("series_color_rgb", palette[idx % len(palette)])
         _draw_polyline_decimated(
             draw,
             t_win,
@@ -1402,10 +1408,38 @@ def build_multi_clickable_waveform_image(
             max_points=max_points,
         )
 
+    # Legend inside the plot area, like the Plotly chart in "Envoltórias calculadas".
+    legend_items = [
+        (item["name"][:36], item.get("series_color_rgb", palette[idx % len(palette)]))
+        for idx, (item, _t_win, _y_win) in enumerate(waveform_cache)
+    ]
+    if legend_items:
+        text_width = max(_text_size(draw, name)[0] for name, _color in legend_items)
+        legend_width = min(max(text_width + 82, 210), 380)
+        legend_row_height = 24
+        legend_height = 18 + legend_row_height * len(legend_items)
+        legend_left = right - legend_width - 14
+        legend_top = top + 12
+        legend_right = right - 14
+        legend_bottom = legend_top + legend_height
+        draw.rounded_rectangle(
+            [legend_left, legend_top, legend_right, legend_bottom],
+            radius=8,
+            fill=(255, 255, 255),
+            outline=(218, 224, 232),
+            width=1,
+        )
+        for idx, (name, color) in enumerate(legend_items):
+            ly = legend_top + 10 + idx * legend_row_height
+            lx = legend_left + 12
+            draw.line([(lx, ly + 8), (lx + 30, ly + 8)], fill=color, width=3)
+            draw.ellipse([lx + 11, ly + 3, lx + 21, ly + 13], fill="white", outline=color, width=3)
+            _draw_text(draw, (lx + 40, ly), name, fill=(50, 56, 66))
+
     # Draw peak markers after all waveforms so the clickable targets stay visible.
     for idx, item in enumerate(items):
         name = item["name"]
-        color = palette[idx % len(palette)]
+        color = item.get("series_color_rgb", palette[idx % len(palette)])
         peak_df = peaks_by_file.get(name, pd.DataFrame())
         selected_set = set(int(x) for x in selected_by_file.get(name, []))
         if peak_df.empty:
@@ -1515,7 +1549,7 @@ def plot_selected_envelope_fit(fit_df: pd.DataFrame, envelope: dict, log_y: bool
             y=y_abs,
             mode="markers",
             name="picos selecionados",
-            marker=dict(size=13, symbol="diamond-open"),
+            marker=dict(size=13, symbol="diamond-open", color="rgb(235,68,68)", line=dict(color="rgb(235,68,68)")),
         )
     )
 
@@ -1530,6 +1564,7 @@ def plot_selected_envelope_fit(fit_df: pd.DataFrame, envelope: dict, log_y: bool
                 y=y_fit,
                 mode="lines",
                 name="ajuste exponencial",
+                line=dict(color=SERIES_COLORS_HEX[0], width=2.5),
             )
         )
 
@@ -1868,9 +1903,12 @@ if not uploaded_files:
 waveforms: list[dict] = []
 errors: list[str] = []
 
-for file in uploaded_files:
+for idx, file in enumerate(uploaded_files):
     try:
-        waveforms.append(parse_uploaded_file(file.name, file.getvalue()))
+        item = parse_uploaded_file(file.name, file.getvalue())
+        item["series_color_rgb"] = SERIES_COLORS_RGB[idx % len(SERIES_COLORS_RGB)]
+        item["series_color_hex"] = SERIES_COLORS_HEX[idx % len(SERIES_COLORS_HEX)]
+        waveforms.append(item)
     except Exception as exc:
         errors.append(f"{file.name}: {exc}")
 
@@ -2236,7 +2274,7 @@ with tab_signal:
                     st.session_state[_multi_image_click_version_key()] = 0
 
                 st.caption(
-                    "Curvas e picos usam a mesma cor da legenda; vermelho indica os picos selecionados para o ajuste."
+                    "A legenda das curvas fica dentro do gráfico; vermelho indica os picos selecionados para o ajuste."
                 )
                 click_img, peak_pixels = build_multi_clickable_waveform_image(
                     selected_items,
@@ -2271,7 +2309,7 @@ with tab_signal:
                     key=(
                         "envelope_multi_image_click_"
                         f"{st.session_state[_multi_image_click_version_key()]}_"
-                        f"{image_state_signature}_v038"
+                        f"{image_state_signature}_v0311"
                     ),
                 )
                 changed = toggle_multi_peak_selection_from_image_click(
@@ -2300,6 +2338,7 @@ with tab_signal:
                 )
                 envelope_fit_tables[name] = fit_df
                 if np.isfinite(envelope_metrics.get("tau_us", np.nan)):
+                    envelope_metrics["series_color"] = ring_item.get("series_color_hex", SERIES_COLORS_HEX[len(envelope_rows) % len(SERIES_COLORS_HEX)])
                     envelope_rows.append(envelope_metrics)
 
             if len(envelope_rows) == 0:
@@ -2501,7 +2540,13 @@ with tab_signal:
             t_plot, p_plot = decimate_for_plot(t, p, max_points=min(max_plot_points, POWER_PLOT_MAX_POINTS))
             fig_p = go.Figure()
             fig_p.add_trace(
-                go.Scattergl(x=t_plot * 1e6, y=p_plot, mode="lines", name="P(t)=V(t)I(t)")
+                go.Scattergl(
+                    x=t_plot * 1e6,
+                    y=p_plot,
+                    mode="lines",
+                    name="P(t)=V(t)I(t)",
+                    line=dict(color=SERIES_COLORS_HEX[0]),
+                )
             )
             fig_p.update_layout(
                 height=500,
