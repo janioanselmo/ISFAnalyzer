@@ -15,7 +15,7 @@ On Windows, you can also run:
 run_windows.bat
 ```
 
-## v0.3.5 usability notes
+## v0.3.6 usability notes
 
 The **Envelope** operation now follows the dominant-positive-peak workflow:
 
@@ -27,6 +27,12 @@ The **Envelope** operation now follows the dominant-positive-peak workflow:
 6. Click a red peak to remove it from the fit, or click a visible candidate to add it back.
 7. The exponential envelope is fitted automatically when at least two peaks are selected for a file.
 8. With multiple files, waveforms and dominant positive peaks share the same axis and fitted envelopes are overlaid for comparison.
+
+## v0.3.6
+
+- Envelope defaults updated for ringdown analysis: start = -100 µs, end = 500 µs.
+- Automatic peak selection now starts with 4 peaks per curve.
+- Default auto-selection criterion changed to **Últimos N picos**.
 
 ## v0.3.5
 

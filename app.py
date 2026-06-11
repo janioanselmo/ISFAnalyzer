@@ -43,7 +43,7 @@ st.set_page_config(
 )
 
 
-APP_VERSION = "0.3.5-auto-dominant-peaks"
+APP_VERSION = "0.3.6-envelope-defaults"
 
 
 def _format_metric(value: float, unit: str = "", precision: int = 4) -> str:
@@ -1660,16 +1660,18 @@ with st.sidebar:
     st.subheader("Janela de ringing")
     ring_start_us = st.number_input(
         "Início da janela de ringing (µs)",
-        value=-90.0,
+        value=-100.0,
         step=1.0,
         format="%.3f",
+        key="sidebar_ring_start_us_v036",
         help="Ajuste para pegar os picos finais da oscilação natural, após o disparo principal.",
     )
     ring_end_us = st.number_input(
         "Fim da janela de ringing (µs)",
-        value=240.0,
+        value=500.0,
         step=1.0,
         format="%.3f",
+        key="sidebar_ring_end_us_v036",
     )
     peak_threshold_fraction = st.slider(
         "Limiar dos picos de ringing (% do maior pico na janela)",
@@ -1835,7 +1837,7 @@ with tab_signal:
             "Arquivos no mesmo eixo",
             file_names,
             default=default_files,
-            key="envelope_files_v035",
+            key="envelope_files_v036",
             help="Selecione até 4 arquivos para manter a leitura visual rápida e clara.",
         )
         if len(env_selected_names) > 4:
@@ -1848,14 +1850,14 @@ with tab_signal:
             value=ring_start_us,
             step=1.0,
             format="%.3f",
-            key="envelope_start_us_v035",
+            key="envelope_start_us_v036",
         )
         env_end_us = control_cols[1].number_input(
             "Fim (µs)",
             value=ring_end_us,
             step=1.0,
             format="%.3f",
-            key="envelope_end_us_v035",
+            key="envelope_end_us_v036",
         )
         env_threshold = control_cols[2].slider(
             "Limiar dos picos (%)",
@@ -1863,7 +1865,7 @@ with tab_signal:
             max_value=50,
             value=int(round(peak_threshold_fraction * 100)),
             step=1,
-            key="envelope_threshold_v035",
+            key="envelope_threshold_v036",
         ) / 100.0
         env_min_distance = control_cols[3].number_input(
             "Distância mínima (µs)",
@@ -1871,7 +1873,7 @@ with tab_signal:
             value=min_peak_distance_us,
             step=0.5,
             format="%.3f",
-            key="envelope_min_distance_v035",
+            key="envelope_min_distance_v036",
         )
         polarity = "Somente máximos"
 
@@ -1879,29 +1881,29 @@ with tab_signal:
         auto_select_enabled = auto_cols[0].checkbox(
             "Auto-selecionar",
             value=True,
-            key="envelope_auto_enabled_v035",
+            key="envelope_auto_enabled_v036",
             help="Quando ativo, o app já seleciona os N picos dominantes para calcular a envoltória.",
         )
         auto_n = auto_cols[1].number_input(
             "Picos por curva",
             min_value=1,
             max_value=12,
-            value=6,
+            value=4,
             step=1,
-            key="envelope_auto_n_v035",
+            key="envelope_auto_n_v036",
             help="Quantidade de picos máximos positivos usados no ajuste. Com 1 pico não há ajuste exponencial; use 2 ou mais.",
         )
         auto_mode = auto_cols[2].selectbox(
             "Critério",
             ["N maiores picos", "Últimos N picos"],
-            index=0,
-            key="envelope_auto_mode_v035",
+            index=1,
+            key="envelope_auto_mode_v036",
             help="N maiores picos prioriza amplitude; Últimos N picos prioriza os picos finais no tempo.",
         )
         focus_y = auto_cols[3].checkbox(
             "Focar Y",
             value=False,
-            key="envelope_focus_y_v035",
+            key="envelope_focus_y_v036",
             help="Quando ativo, aproxima a escala vertical dos picos marcados. Desative para ver toda a onda na janela.",
         )
         auto_cols[4].info(
@@ -1913,12 +1915,12 @@ with tab_signal:
         log_y_fit = option_cols[0].checkbox(
             "Envelope em log",
             value=False,
-            key="envelope_log_y_v035",
+            key="envelope_log_y_v036",
         )
         normalize_env = option_cols[1].checkbox(
             "Comparar normalizado",
             value=True,
-            key="envelope_compare_norm_v035",
+            key="envelope_compare_norm_v036",
         )
         option_cols[2].caption(
             "Use o clique no pico para desmarcar/remarcar. Se alterar N, janela, limiar ou critério, "
@@ -1997,7 +1999,7 @@ with tab_signal:
                 )
 
             action_cols = st.columns([1, 1, 1, 3])
-            if action_cols[0].button("Limpar seleção", key="clear_all_peak_selection_v035"):
+            if action_cols[0].button("Limpar seleção", key="clear_all_peak_selection_v036"):
                 for name in env_selected_names:
                     set_selected_peak_ids_for_file(name, [])
                     # Preserve the current auto-signature so clearing does not

@@ -1,5 +1,12 @@
 # Changelog
 
+## v0.3.6 - Envelope defaults
+
+- Changed the sidebar ringdown window defaults to -100 µs and 500 µs.
+- Changed Envelope automatic peak count default from 6 to 4 peaks per curve.
+- Changed Envelope auto-selection criterion default to Últimos N picos.
+- Updated Streamlit widget keys for the Envelope defaults to avoid stale session-state values.
+
 ## v0.3.5 - Auto dominant positive peaks
 
 - Added automatic selection of the N dominant positive peaks in Envelope mode.
