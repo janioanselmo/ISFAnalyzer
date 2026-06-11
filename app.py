@@ -40,7 +40,7 @@ st.set_page_config(
 )
 
 
-APP_VERSION = "0.3.20-natural-ringdown-peaks"
+APP_VERSION = "0.3.21-cycle-crest-peaks"
 
 
 # Global color order used by all analysis screens.
@@ -1692,7 +1692,7 @@ def _envelope_peak_cache_key(
     candidate_floor_fraction: float,
 ) -> tuple:
     return (
-        "envelope_peaks_v0320",
+        "envelope_peaks_v0321",
         item.get("data_hash"),
         round(float(start_us), 6),
         round(float(end_us), 6),
@@ -1786,6 +1786,72 @@ def _prominence_for_upper_peaks(
     return prominence
 
 
+def _cycle_crest_candidates(
+    y: np.ndarray,
+    t: np.ndarray,
+    min_indices: np.ndarray,
+    min_distance_samples: int,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Return upper crests as maxima between consecutive valleys.
+
+    For the envelope workflow, the physically relevant points are the upper
+    crests of each free-oscillation cycle. A simple local-maximum detector can
+    be fooled by tail ripple, baseline noise or by a smoothed minimum being
+    refined incorrectly. Segmenting the signal from valley to valley makes the
+    definition stricter: each candidate must be the maximum sample between two
+    neighboring lower valleys. Therefore selected points cannot be valleys.
+    """
+    min_indices = np.asarray(sorted(set(int(i) for i in min_indices)), dtype=int)
+    if min_indices.size < 2:
+        return np.array([], dtype=int), np.array([], dtype=float)
+
+    min_gap = max(1, int(min_distance_samples // 2))
+    crest_indices: list[int] = []
+    prominences: list[float] = []
+    n = int(len(y))
+
+    for left, right in zip(min_indices[:-1], min_indices[1:]):
+        left = int(left)
+        right = int(right)
+        if right <= left + min_gap:
+            continue
+        if left < 0 or right >= n:
+            continue
+
+        segment = y[left : right + 1]
+        if segment.size < 3 or not np.any(np.isfinite(segment)):
+            continue
+
+        rel_max = int(np.nanargmax(segment))
+        idx = left + rel_max
+
+        # Reject crests sitting at the valley boundaries. A physical upper lobe
+        # must occur inside the valley-to-valley interval.
+        edge_guard = max(1, min(min_gap // 2, max(1, (right - left) // 5)))
+        if idx <= left + edge_guard or idx >= right - edge_guard:
+            continue
+
+        local_reference = max(float(y[left]), float(y[right]))
+        prominence = float(y[idx]) - local_reference
+        if not np.isfinite(prominence) or prominence <= 0:
+            continue
+
+        crest_indices.append(int(idx))
+        prominences.append(float(prominence))
+
+    if not crest_indices:
+        return np.array([], dtype=int), np.array([], dtype=float)
+
+    # Deduplicate rare duplicated indices from adjacent/flat minima.
+    best: dict[int, float] = {}
+    for idx, prom in zip(crest_indices, prominences):
+        if idx not in best or prom > best[idx]:
+            best[int(idx)] = float(prom)
+
+    ordered = sorted(best)
+    return np.array(ordered, dtype=int), np.array([best[i] for i in ordered], dtype=float)
+
+
 def robust_upper_peak_candidates_from_waveform(
     item: dict,
     start_us: float,
@@ -1832,24 +1898,41 @@ def robust_upper_peak_candidates_from_waveform(
     max_idx = _refine_indices_to_raw_extrema(y_win, max_detect, refine_radius, kind="max")
     min_idx = _refine_indices_to_raw_extrema(y_win, min_detect, refine_radius, kind="min")
 
-    # Keep only extrema that are local maxima in a small neighborhood. This is
-    # the guard that prevents valleys from being displayed as candidate peaks.
-    guard_radius = max(2, min(refine_radius, max(3, min_distance_samples // 4)))
-    valid_maxima: list[int] = []
-    for idx in max_idx:
-        left = max(0, int(idx) - guard_radius)
-        right = min(len(y_win), int(idx) + guard_radius + 1)
-        segment = y_win[left:right]
-        if segment.size == 0 or not np.any(np.isfinite(segment)):
-            continue
-        if float(y_win[idx]) >= float(np.nanmax(segment)) - 1e-12:
-            valid_maxima.append(int(idx))
-    max_idx = np.array(sorted(set(valid_maxima)), dtype=int)
+    # Prefer cycle crests: maxima between two consecutive valleys. This is much
+    # more robust for the default "N picos após maior pico" workflow because
+    # it follows the free oscillation lobes instead of accepting arbitrary local
+    # ripples from the tail. It also guarantees that valleys cannot become
+    # selectable envelope peaks.
+    cycle_max_idx, cycle_prominence = _cycle_crest_candidates(
+        y_win,
+        t_win,
+        min_idx,
+        min_distance_samples=min_distance_samples,
+    )
 
-    if max_idx.size == 0:
-        return pd.DataFrame(columns=["tipo", "tempo_us", "amplitude", "prominence", "abs_amplitude", "dominance_score", "peak_id"]), 0
+    if cycle_max_idx.size > 0:
+        max_idx = cycle_max_idx
+        prominence = cycle_prominence
+    else:
+        # Fallback: keep only extrema that are local maxima in a broader
+        # neighborhood. The broader guard prevents a refined valley from being
+        # accepted as an upper crest.
+        guard_radius = max(2, min(refine_radius * 2, max(3, min_distance_samples)))
+        valid_maxima: list[int] = []
+        for idx in max_idx:
+            left = max(0, int(idx) - guard_radius)
+            right = min(len(y_win), int(idx) + guard_radius + 1)
+            segment = y_win[left:right]
+            if segment.size == 0 or not np.any(np.isfinite(segment)):
+                continue
+            if float(y_win[idx]) >= float(np.nanmax(segment)) - 1e-12:
+                valid_maxima.append(int(idx))
+        max_idx = np.array(sorted(set(valid_maxima)), dtype=int)
 
-    prominence = _prominence_for_upper_peaks(y_win, max_idx, min_idx)
+        if max_idx.size == 0:
+            return pd.DataFrame(columns=["tipo", "tempo_us", "amplitude", "prominence", "abs_amplitude", "dominance_score", "peak_id"]), 0
+
+        prominence = _prominence_for_upper_peaks(y_win, max_idx, min_idx)
     y_range = float(np.nanmax(y_win) - np.nanmin(y_win))
     peak_abs = float(np.nanmax(np.abs(y_win)))
     scale = max(peak_abs, 0.5 * y_range, 1e-12)
