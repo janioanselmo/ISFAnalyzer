@@ -15,19 +15,26 @@ On Windows, you can also run:
 run_windows.bat
 ```
 
-## v0.3.4 usability notes
+## v0.3.5 usability notes
 
-The **Envelope** operation now follows the positive-peak workflow:
+The **Envelope** operation now follows the dominant-positive-peak workflow:
 
 1. Choose 1 to 4 `.ISF` files.
 2. Adjust the ringdown window, peak threshold and minimum peak distance.
 3. The Envelope plot shows the complete waveform trace for context.
-4. Only positive local maxima are marked as clickable points.
-5. Click peak markers manually, or use quick selection for:
-   - last N positive peaks;
-   - N largest positive peaks.
-6. The exponential envelope is fitted automatically when at least two peaks are selected for a file.
-7. With multiple files, waveforms and positive peak markers share the same axis and fitted envelopes are overlaid for comparison.
+4. The app keeps only the dominant positive local maxima as visible clickable candidates.
+5. Enable **Auto-selecionar** and choose **Picos por curva** to start with N peaks already selected in red.
+6. Click a red peak to remove it from the fit, or click a visible candidate to add it back.
+7. The exponential envelope is fitted automatically when at least two peaks are selected for a file.
+8. With multiple files, waveforms and dominant positive peaks share the same axis and fitted envelopes are overlaid for comparison.
+
+## v0.3.5
+
+- Added automatic N-peak selection from dominant positive maxima.
+- Kept the full waveform visible while limiting markers to dominant peak candidates.
+- Added controls for auto-selection, peak count and selection criterion.
+- Preserved manual click-toggle correction after automatic initialization.
+- Reduced clutter and improved responsiveness in Envelope mode.
 
 ## v0.3.4
 

@@ -1,5 +1,14 @@
 # Changelog
 
+## v0.3.5 - Auto dominant positive peaks
+
+- Added automatic selection of the N dominant positive peaks in Envelope mode.
+- The full waveform remains visible, but only dominant positive maxima are marked as candidates.
+- Selected peaks start in red automatically when auto-selection is enabled.
+- Added a simple control for the number of peaks per curve and the auto-selection criterion.
+- Manual mouse clicks can still deselect or reselect peaks after the automatic initialization.
+- Reduced visual clutter and click latency by limiting markers to dominant peak candidates.
+
 ## v0.3.4 - Positive peaks on full waveform
 
 - Restored the full waveform trace in Envelope mode.

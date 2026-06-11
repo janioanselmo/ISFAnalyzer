@@ -43,7 +43,7 @@ st.set_page_config(
 )
 
 
-APP_VERSION = "0.3.4-positive-peaks"
+APP_VERSION = "0.3.5-auto-dominant-peaks"
 
 
 def _format_metric(value: float, unit: str = "", precision: int = 4) -> str:
@@ -400,38 +400,83 @@ def _last_n_extrema_ids(peak_df: pd.DataFrame, kind: str, n_items: int) -> list[
 
 
 def _largest_n_extrema_ids(peak_df: pd.DataFrame, n_items: int) -> list[int]:
-    """Return N extrema IDs with largest absolute amplitude, sorted by time."""
+    """Return N extrema IDs with largest positive amplitude, sorted by time."""
     if peak_df.empty:
         return []
     peaks = peak_df.copy()
-    peaks["abs_amplitude"] = np.abs(peaks["amplitude"].astype(float))
-    peaks = peaks[np.isfinite(peaks["abs_amplitude"])]
+    peaks["dominance_score"] = peaks["amplitude"].astype(float)
+    peaks = peaks[np.isfinite(peaks["dominance_score"])]
     if peaks.empty:
         return []
-    selected = peaks.sort_values("abs_amplitude", ascending=False).head(int(n_items))
+    selected = peaks.sort_values("dominance_score", ascending=False).head(int(n_items))
     return _sort_peak_ids_by_time(peak_df, [int(x) for x in selected["peak_id"].to_list()])
 
 
-def auto_select_extrema_ids(peak_df: pd.DataFrame, mode: str, n_items: int) -> list[int]:
-    """Build an automatic peak/valley selection for envelope fitting."""
+def dominant_positive_peak_candidates(
+    peak_df: pd.DataFrame,
+    max_candidates: int,
+    min_separation_us: float,
+) -> pd.DataFrame:
+    """Keep only the most relevant positive maxima for the Envelope selector.
+
+    The raw peak detector can return many small late oscillations and noise-like
+    maxima. In the Envelope workflow, the user wants the main positive maxima
+    that define the decay curve. This function ranks positive peaks by amplitude,
+    applies a time-domain non-maximum suppression so only one marker remains
+    around each positive lobe, restores chronological order, and reassigns
+    stable peak IDs for clicking.
+    """
+    if peak_df.empty:
+        return peak_df.copy()
+
+    peaks = peak_df[peak_df["tipo"] == "positivo"].copy()
+    peaks["dominance_score"] = peaks["amplitude"].astype(float)
+    peaks = peaks[np.isfinite(peaks["dominance_score"])]
+    peaks = peaks[peaks["dominance_score"] > 0]
+    if peaks.empty:
+        return peaks
+
+    max_candidates = max(1, int(max_candidates))
+    min_separation_us = max(float(min_separation_us), 0.0)
+
+    selected_rows = []
+    for _, row in peaks.sort_values("dominance_score", ascending=False).iterrows():
+        time_us = float(row["tempo_us"])
+        if all(abs(time_us - float(chosen["tempo_us"])) >= min_separation_us for chosen in selected_rows):
+            selected_rows.append(row)
+        if len(selected_rows) >= max_candidates:
+            break
+
+    if not selected_rows:
+        return peaks.head(0).copy()
+
+    peaks = pd.DataFrame(selected_rows).sort_values("tempo_us").reset_index(drop=True)
+    peaks["peak_id"] = np.arange(len(peaks), dtype=int)
+    return peaks
+
+
+def auto_select_positive_peak_ids(peak_df: pd.DataFrame, mode: str, n_items: int) -> list[int]:
+    """Build automatic selection using only dominant positive maxima."""
     if peak_df.empty:
         return []
 
-    if mode == "Últimos N máximos":
-        ids = _last_n_extrema_ids(peak_df, "positivo", n_items)
-    elif mode == "Últimos N mínimos":
-        ids = _last_n_extrema_ids(peak_df, "negativo", n_items)
-    elif mode == "Últimos N máximos + mínimos":
-        ids = (
-            _last_n_extrema_ids(peak_df, "positivo", n_items)
-            + _last_n_extrema_ids(peak_df, "negativo", n_items)
-        )
-    elif mode == "N maiores |amplitude|":
-        ids = _largest_n_extrema_ids(peak_df, n_items)
+    n_items = max(1, int(n_items))
+    if mode == "Últimos N picos":
+        ids = [
+            int(x)
+            for x in peak_df.sort_values("tempo_us").tail(n_items)["peak_id"].to_list()
+        ]
     else:
-        ids = []
+        ids = _largest_n_extrema_ids(peak_df, n_items)
 
     return _sort_peak_ids_by_time(peak_df, ids)
+
+
+def auto_select_extrema_ids(peak_df: pd.DataFrame, mode: str, n_items: int) -> list[int]:
+    """Backward-compatible alias for automatic positive-peak selection."""
+    if mode in {"Últimos N máximos", "Últimos N picos"}:
+        return auto_select_positive_peak_ids(peak_df, "Últimos N picos", n_items)
+    return auto_select_positive_peak_ids(peak_df, "N maiores picos", n_items)
 
 
 def fit_exponential_envelope(
@@ -730,11 +775,11 @@ def _state_suffix(name: str) -> str:
 
 
 def _peak_selection_key(file_name: str) -> str:
-    return f"envelope_selected_peak_ids_{_state_suffix(file_name)}_v034"
+    return f"envelope_selected_peak_ids_{_state_suffix(file_name)}_v035"
 
 
 def _last_click_key(file_name: str) -> str:
-    return f"envelope_last_click_signature_{_state_suffix(file_name)}_v034"
+    return f"envelope_last_click_signature_{_state_suffix(file_name)}_v035"
 
 
 def selected_peak_ids_for_file(file_name: str) -> list[int]:
@@ -1167,16 +1212,43 @@ def toggle_peak_selection_from_image_click(
 
 
 def _image_click_version_key(file_name: str) -> str:
-    return f"envelope_image_click_version_{_state_suffix(file_name)}_v034"
+    return f"envelope_image_click_version_{_state_suffix(file_name)}_v035"
 
 
 
 def _multi_image_click_version_key() -> str:
-    return "envelope_multi_image_click_version_v034"
+    return "envelope_multi_image_click_version_v035"
 
 
 def _multi_last_click_key() -> str:
-    return "envelope_multi_last_click_signature_v034"
+    return "envelope_multi_last_click_signature_v035"
+
+
+def _auto_selection_signature_key(file_name: str) -> str:
+    return f"envelope_auto_selection_signature_{_state_suffix(file_name)}_v035"
+
+
+def _auto_selection_signature(
+    file_name: str,
+    peak_df: pd.DataFrame,
+    n_peaks: int,
+    mode: str,
+    start_us: float,
+    end_us: float,
+    threshold: float,
+    min_distance_us: float,
+) -> str:
+    """Return a compact signature for automatic envelope peak selection."""
+    if peak_df.empty:
+        time_digest = "empty"
+    else:
+        times = peak_df["tempo_us"].astype(float).round(6).astype(str).str.cat(sep=",")
+        amplitudes = peak_df["amplitude"].astype(float).round(3).astype(str).str.cat(sep=",")
+        time_digest = hashlib.md5(f"{times}|{amplitudes}".encode("utf-8")).hexdigest()[:10]
+    return (
+        f"{file_name}|{n_peaks}|{mode}|{start_us:.6g}|{end_us:.6g}|"
+        f"{threshold:.6g}|{min_distance_us:.6g}|{len(peak_df)}|{time_digest}"
+    )
 
 
 def _draw_polyline_decimated(
@@ -1660,7 +1732,7 @@ with tab_signal:
         "Operação",
         ["Sinais", "Envelope", "Comparação", "Potência"],
         horizontal=True,
-        key="signal_analysis_mode_v034",
+        key="signal_analysis_mode_v035",
         help=(
             "Sinais: visualizar curvas e métricas gerais. Envelope: selecionar picos por clique e ajustar decaimento. "
             "Comparação: antes/depois. Potência: análise V × I."
@@ -1763,7 +1835,7 @@ with tab_signal:
             "Arquivos no mesmo eixo",
             file_names,
             default=default_files,
-            key="envelope_files_v034",
+            key="envelope_files_v035",
             help="Selecione até 4 arquivos para manter a leitura visual rápida e clara.",
         )
         if len(env_selected_names) > 4:
@@ -1776,14 +1848,14 @@ with tab_signal:
             value=ring_start_us,
             step=1.0,
             format="%.3f",
-            key="envelope_start_us_v034",
+            key="envelope_start_us_v035",
         )
         env_end_us = control_cols[1].number_input(
             "Fim (µs)",
             value=ring_end_us,
             step=1.0,
             format="%.3f",
-            key="envelope_end_us_v034",
+            key="envelope_end_us_v035",
         )
         env_threshold = control_cols[2].slider(
             "Limiar dos picos (%)",
@@ -1791,7 +1863,7 @@ with tab_signal:
             max_value=50,
             value=int(round(peak_threshold_fraction * 100)),
             step=1,
-            key="envelope_threshold_v034",
+            key="envelope_threshold_v035",
         ) / 100.0
         env_min_distance = control_cols[3].number_input(
             "Distância mínima (µs)",
@@ -1799,30 +1871,58 @@ with tab_signal:
             value=min_peak_distance_us,
             step=0.5,
             format="%.3f",
-            key="envelope_min_distance_v034",
+            key="envelope_min_distance_v035",
         )
         polarity = "Somente máximos"
 
-        option_cols = st.columns([1, 1, 1, 3])
-        focus_y = option_cols[0].checkbox(
-            "Focar eixo Y nos picos",
+        auto_cols = st.columns([1, 1, 1, 1, 2])
+        auto_select_enabled = auto_cols[0].checkbox(
+            "Auto-selecionar",
+            value=True,
+            key="envelope_auto_enabled_v035",
+            help="Quando ativo, o app já seleciona os N picos dominantes para calcular a envoltória.",
+        )
+        auto_n = auto_cols[1].number_input(
+            "Picos por curva",
+            min_value=1,
+            max_value=12,
+            value=6,
+            step=1,
+            key="envelope_auto_n_v035",
+            help="Quantidade de picos máximos positivos usados no ajuste. Com 1 pico não há ajuste exponencial; use 2 ou mais.",
+        )
+        auto_mode = auto_cols[2].selectbox(
+            "Critério",
+            ["N maiores picos", "Últimos N picos"],
+            index=0,
+            key="envelope_auto_mode_v035",
+            help="N maiores picos prioriza amplitude; Últimos N picos prioriza os picos finais no tempo.",
+        )
+        focus_y = auto_cols[3].checkbox(
+            "Focar Y",
             value=False,
-            key="envelope_focus_y_v034",
+            key="envelope_focus_y_v035",
             help="Quando ativo, aproxima a escala vertical dos picos marcados. Desative para ver toda a onda na janela.",
         )
-        log_y_fit = option_cols[1].checkbox(
+        auto_cols[4].info(
+            "O gráfico mostra a onda completa. O app marca apenas máximos positivos dominantes, "
+            "seleciona N automaticamente em vermelho e permite ajuste manual por clique."
+        )
+
+        option_cols = st.columns([1, 1, 4])
+        log_y_fit = option_cols[0].checkbox(
             "Envelope em log",
             value=False,
-            key="envelope_log_y_v034",
+            key="envelope_log_y_v035",
         )
-        normalize_env = option_cols[2].checkbox(
+        normalize_env = option_cols[1].checkbox(
             "Comparar normalizado",
             value=True,
-            key="envelope_compare_norm_v034",
+            key="envelope_compare_norm_v035",
         )
-        option_cols[3].info(
-            "O gráfico mostra a onda completa. As únicas marcações clicáveis são os picos máximos positivos. "
-            "Use clique manual ou seleção rápida dos últimos/maiores picos."
+        option_cols[2].caption(
+            "Use o clique no pico para desmarcar/remarcar. Se alterar N, janela, limiar ou critério, "
+            "a seleção automática é recalculada."
         )
 
         if not env_selected_names:
@@ -1832,10 +1932,19 @@ with tab_signal:
             st.markdown("**2) Seleção dos picos no mesmo eixo**")
 
             peaks_by_file: dict[str, pd.DataFrame] = {}
+            raw_peak_count_by_file: dict[str, int] = {}
             selected_by_file: dict[str, list[int]] = {}
             peak_summary_rows = []
+
+            # Keep a compact pool of dominant positive maxima. This keeps the
+            # image selector fast and prevents dozens of tiny late oscillations
+            # from cluttering the Envelope workflow. The auto-selected N peaks
+            # are chosen from this same candidate pool.
+            candidate_count = max(int(auto_n) + 4, int(auto_n), 8)
+            candidate_count = min(candidate_count, 24)
+
             for ring_item in selected_items:
-                peak_df = add_peak_ids(
+                raw_peak_df = add_peak_ids(
                     ringdown_peak_table(
                         ring_item["time_s"],
                         ring_item["value"],
@@ -1846,75 +1955,99 @@ with tab_signal:
                         min_peak_distance_us=env_min_distance,
                     )
                 )
-                peak_df = filter_peak_table_by_polarity(peak_df, polarity).reset_index(drop=True)
-                if not peak_df.empty:
-                    peak_df["peak_id"] = np.arange(len(peak_df), dtype=int)
+                raw_peak_df = filter_peak_table_by_polarity(raw_peak_df, polarity).reset_index(drop=True)
+                raw_peak_count_by_file[ring_item["name"]] = int(len(raw_peak_df))
+
+                peak_df = dominant_positive_peak_candidates(
+                    raw_peak_df,
+                    candidate_count,
+                    min_separation_us=max(float(env_min_distance) * 8.0, float(env_min_distance)),
+                )
                 peaks_by_file[ring_item["name"]] = peak_df
 
                 selected_ids = selected_peak_ids_for_file(ring_item["name"])
                 valid_ids = set(peak_df["peak_id"].to_list()) if not peak_df.empty else set()
                 selected_ids = [peak_id for peak_id in selected_ids if peak_id in valid_ids]
+
+                if auto_select_enabled:
+                    signature = _auto_selection_signature(
+                        ring_item["name"],
+                        peak_df,
+                        int(auto_n),
+                        auto_mode,
+                        float(env_start_us),
+                        float(env_end_us),
+                        float(env_threshold),
+                        float(env_min_distance),
+                    )
+                    signature_key = _auto_selection_signature_key(ring_item["name"])
+                    if st.session_state.get(signature_key) != signature:
+                        selected_ids = auto_select_positive_peak_ids(peak_df, auto_mode, int(auto_n))
+                        st.session_state[signature_key] = signature
+
                 set_selected_peak_ids_for_file(ring_item["name"], selected_ids)
                 selected_by_file[ring_item["name"]] = selected_ids
                 peak_summary_rows.append(
                     {
                         "arquivo": ring_item["name"],
-                        "picos_detectados": int(len(peak_df)),
+                        "picos_brutos": raw_peak_count_by_file[ring_item["name"]],
+                        "candidatos_visíveis": int(len(peak_df)),
                         "picos_selecionados": int(len(selected_ids)),
                     }
                 )
 
-            action_cols = st.columns([1, 1, 4])
-            if action_cols[0].button("Limpar seleção", key="clear_all_peak_selection_v034"):
+            action_cols = st.columns([1, 1, 1, 3])
+            if action_cols[0].button("Limpar seleção", key="clear_all_peak_selection_v035"):
                 for name in env_selected_names:
                     set_selected_peak_ids_for_file(name, [])
+                    # Preserve the current auto-signature so clearing does not
+                    # immediately reselect the same peaks on the rerun.
+                    peak_df = peaks_by_file.get(name, pd.DataFrame())
+                    st.session_state[_auto_selection_signature_key(name)] = _auto_selection_signature(
+                        name,
+                        peak_df,
+                        int(auto_n),
+                        auto_mode,
+                        float(env_start_us),
+                        float(env_end_us),
+                        float(env_threshold),
+                        float(env_min_distance),
+                    )
                 st.session_state[_multi_last_click_key()] = None
                 st.session_state[_multi_image_click_version_key()] = int(
                     st.session_state.get(_multi_image_click_version_key(), 0)
                 ) + 1
                 st.rerun()
-            action_cols[1].caption(
+
+            if action_cols[1].button("Reaplicar automático", key="reapply_auto_peak_selection_v035"):
+                for name in env_selected_names:
+                    peak_df = peaks_by_file.get(name, pd.DataFrame())
+                    selected_ids = auto_select_positive_peak_ids(peak_df, auto_mode, int(auto_n))
+                    set_selected_peak_ids_for_file(name, selected_ids)
+                    st.session_state[_auto_selection_signature_key(name)] = _auto_selection_signature(
+                        name,
+                        peak_df,
+                        int(auto_n),
+                        auto_mode,
+                        float(env_start_us),
+                        float(env_end_us),
+                        float(env_threshold),
+                        float(env_min_distance),
+                    )
+                st.session_state[_multi_last_click_key()] = None
+                st.session_state[_multi_image_click_version_key()] = int(
+                    st.session_state.get(_multi_image_click_version_key(), 0)
+                ) + 1
+                st.rerun()
+
+            action_cols[2].caption(
                 f"Total selecionado: {sum(len(v) for v in selected_by_file.values())}"
             )
-            action_cols[2].dataframe(pd.DataFrame(peak_summary_rows), width="stretch", height=130)
-
-            st.markdown("**Seleção rápida de picos**")
-            auto_cols = st.columns([1, 1, 1, 3])
-            auto_n = auto_cols[0].number_input(
-                "N por arquivo",
-                min_value=2,
-                max_value=8,
-                value=3,
-                step=1,
-                key="envelope_auto_n_v034",
-                help="Use 3 ou 4 para selecionar automaticamente picos máximos positivos detectados.",
-            )
-
-            auto_actions = [
-                ("Últimos N picos", "Últimos N máximos"),
-                ("N maiores picos", "N maiores |amplitude|"),
-            ]
-            for col, (button_label, mode_label) in zip(auto_cols[1:3], auto_actions):
-                if col.button(button_label, key=f"auto_select_{mode_label}_{auto_n}_v034"):
-                    for name in env_selected_names:
-                        peak_df = peaks_by_file.get(name, pd.DataFrame())
-                        set_selected_peak_ids_for_file(
-                            name,
-                            auto_select_extrema_ids(peak_df, mode_label, int(auto_n)),
-                        )
-                    st.session_state[_multi_last_click_key()] = None
-                    st.session_state[_multi_image_click_version_key()] = int(
-                        st.session_state.get(_multi_image_click_version_key(), 0)
-                    ) + 1
-                    st.rerun()
-            auto_cols[3].caption(
-                "Opcional: use a seleção automática apenas para acelerar a escolha inicial; "
-                "depois você ainda pode ajustar manualmente pelo mouse."
-            )
+            action_cols[3].dataframe(pd.DataFrame(peak_summary_rows), width="stretch", height=130)
 
             st.caption(
                 "No gráfico do Envelope a onda completa permanece desenhada. "
-                "As marcações clicáveis aparecem somente nos picos máximos positivos; vermelho indica seleção."
+                "As marcações aparecem somente nos máximos positivos dominantes; vermelho indica os picos usados no ajuste."
             )
 
             if any(df.empty for df in peaks_by_file.values()):
@@ -1950,7 +2083,7 @@ with tab_signal:
                     width=1450,
                     key=(
                         "envelope_multi_image_click_"
-                        f"{st.session_state[_multi_image_click_version_key()]}_v034"
+                        f"{st.session_state[_multi_image_click_version_key()]}_v035"
                     ),
                 )
                 changed = toggle_multi_peak_selection_from_image_click(
@@ -1986,14 +2119,14 @@ with tab_signal:
             else:
                 envelope_df = pd.DataFrame(envelope_rows)
                 fig_cmp = plot_envelope_comparison(envelope_df, normalize=normalize_env)
-                st.plotly_chart(fig_cmp, width="stretch", key="envelope_compare_chart_v034")
+                st.plotly_chart(fig_cmp, width="stretch", key="envelope_compare_chart_v035")
                 st.dataframe(compact_metrics_table(envelope_rows), width="stretch")
                 st.download_button(
                     "Baixar comparação de envelopes em CSV",
                     data=envelope_df.to_csv(index=False).encode("utf-8"),
                     file_name="comparacao_envelopes_exponenciais.csv",
                     mime="text/csv",
-                    key="download_envelope_compare_v034",
+                    key="download_envelope_compare_v035",
                 )
 
             with st.expander("Detalhar picos selecionados e detectados", expanded=False):
@@ -2211,7 +2344,7 @@ with tab_export:
         "As métricas completas são geradas sob demanda para não deixar os cliques do Envelope lentos."
     )
 
-    if st.button("Gerar métricas para exportação", key="prepare_export_metrics_v034"):
+    if st.button("Gerar métricas para exportação", key="prepare_export_metrics_v035"):
         metrics_rows, metrics_df = build_waveform_metrics_table(
             waveforms,
             gap_mm=gap_mm,
@@ -2228,23 +2361,23 @@ with tab_export:
             peak_threshold_fraction=peak_threshold_fraction,
             min_peak_distance_us=min_peak_distance_us,
         )
-        st.session_state["export_metrics_csv_v034"] = metrics_df.to_csv(index=False).encode("utf-8")
-        st.session_state["export_ring_metrics_csv_v034"] = ring_metrics_df.to_csv(index=False).encode("utf-8")
+        st.session_state["export_metrics_csv_v035"] = metrics_df.to_csv(index=False).encode("utf-8")
+        st.session_state["export_ring_metrics_csv_v035"] = ring_metrics_df.to_csv(index=False).encode("utf-8")
 
-    if "export_metrics_csv_v034" in st.session_state:
+    if "export_metrics_csv_v035" in st.session_state:
         st.download_button(
             "Baixar métricas gerais em CSV",
-            data=st.session_state["export_metrics_csv_v034"],
+            data=st.session_state["export_metrics_csv_v035"],
             file_name="metricas_isf.csv",
             mime="text/csv",
-            key="download_general_metrics_v034",
+            key="download_general_metrics_v035",
         )
         st.download_button(
             "Baixar métricas de ringing em CSV",
-            data=st.session_state["export_ring_metrics_csv_v034"],
+            data=st.session_state["export_ring_metrics_csv_v035"],
             file_name="metricas_ringdown_resonancia.csv",
             mime="text/csv",
-            key="download_ring_metrics_v034",
+            key="download_ring_metrics_v035",
         )
     else:
         st.info("Clique em 'Gerar métricas para exportação' quando precisar dos CSVs de métricas.")
@@ -2253,24 +2386,24 @@ with tab_export:
     export_name = st.selectbox(
         "Exportar forma de onda",
         [item["name"] for item in waveforms],
-        key="export_waveform_select_v034",
+        key="export_waveform_select_v035",
     )
     export_item = next(item for item in waveforms if item["name"] == export_name)
 
-    if st.button("Gerar CSV da forma de onda", key="prepare_waveform_csv_v034"):
-        st.session_state["export_waveform_csv_v034"] = waveform_csv_bytes(export_item)
-        st.session_state["export_waveform_csv_name_v034"] = Path(export_name).with_suffix(".csv").name
+    if st.button("Gerar CSV da forma de onda", key="prepare_waveform_csv_v035"):
+        st.session_state["export_waveform_csv_v035"] = waveform_csv_bytes(export_item)
+        st.session_state["export_waveform_csv_name_v035"] = Path(export_name).with_suffix(".csv").name
 
     if (
-        "export_waveform_csv_v034" in st.session_state
-        and st.session_state.get("export_waveform_csv_name_v034") == Path(export_name).with_suffix(".csv").name
+        "export_waveform_csv_v035" in st.session_state
+        and st.session_state.get("export_waveform_csv_name_v035") == Path(export_name).with_suffix(".csv").name
     ):
         st.download_button(
             "Baixar forma de onda em CSV",
-            data=st.session_state["export_waveform_csv_v034"],
-            file_name=st.session_state["export_waveform_csv_name_v034"],
+            data=st.session_state["export_waveform_csv_v035"],
+            file_name=st.session_state["export_waveform_csv_name_v035"],
             mime="text/csv",
-            key="download_waveform_csv_v034",
+            key="download_waveform_csv_v035",
         )
     else:
         st.info("Clique em 'Gerar CSV da forma de onda' para preparar este arquivo.")
