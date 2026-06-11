@@ -1,8 +1,9 @@
 # Changelog
 
-## v0.3.18 — Decay-aware peak detection
+## v0.3.22-ringdown-tracker
 
-- Improved Envelope auto-selection for `Últimos N picos`.
-- Late dominant maxima below the zero axis are less likely to be discarded.
-- Increased candidate pool only for tail-based selection.
-- Kept `N maiores picos` stricter for amplitude-priority fitting.
+- Replaced the envelope auto-selection logic with a ringdown-cycle tracker.
+- The default mode now anchors on the dominant forced crest and tracks the next N natural upper crests cycle-by-cycle.
+- Removed pre-trigger baseline markers from the candidate pool using adaptive noise gating.
+- Kept valleys/minima out of the envelope candidate set.
+- Kept manual click selection and multi-file overlay behavior unchanged.

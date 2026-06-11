@@ -1,17 +1,26 @@
-# ISF Analyzer v0.3.18 — Decay-aware peak detection audit
+# Audit report — ISF Analyzer v0.3.22-ringdown-tracker
 
-## Summary
-This release refines the Envelope automatic selection algorithm for tail-oriented analysis.
+## Scope
 
-## Fix
-When `Critério = Últimos N picos`, late maxima can be physically relevant even when they are below the zero axis or much smaller than the first lobes. The previous candidate filter was still too strict for these late decaying peaks.
+Focused patch for Envelope peak detection robustness.
 
-## Changes
-- Uses a looser detection threshold only for `Últimos N picos`.
-- Uses a larger candidate pool only for tail-oriented peak selection.
-- Keeps the stricter candidate pool for `N maiores picos`.
-- Preserves the existing UI, click selection and multi-file overlay behavior.
+## Checks performed
 
-## Validation
-- Python compile check passed for `app.py`, `ensaisf/analysis.py` and `ensaisf/isf_parser.py`.
-- No structural change to ISF parsing, export, comparison or power analysis.
+- Python compile check passed for:
+  - `app.py`
+  - `ensaisf/analysis.py`
+  - `ensaisf/isf_parser.py`
+- Removed `__pycache__` and `.pyc` files before packaging.
+
+## Algorithm update
+
+The Envelope automatic selection now uses a physics-guided ringdown tracker:
+
+1. baseline is corrected using the existing baseline mode;
+2. pre-trigger/noise candidates are suppressed with an adaptive noise floor;
+3. only upper crests of resonant cycles are kept as candidates;
+4. the dominant forced crest is used as the anchor;
+5. the upper-crest period is estimated from dominant crests;
+6. the next N natural upper crests are tracked cycle-by-cycle.
+
+This avoids selecting tail ripple or lower valleys as envelope peaks.
