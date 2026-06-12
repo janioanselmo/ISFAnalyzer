@@ -1,46 +1,208 @@
 # ISF Analyzer
 
-Local Streamlit app for Tektronix `.ISF` waveform analysis, focused on pulse analysis, ringdown, resonance and electroporation experiments.
+Aplicativo local em Python/Streamlit para análise de formas de onda Tektronix `.ISF`, com foco em pulsos, ringing, ringdown, ressonância e experimentos de eletroporação.
 
-## Run
+> Histórico de versões: [`CHANGELOG.md`](./CHANGELOG.md)
+> Relatórios de validação: [`VALIDATION_RINGDOWN.md`](./VALIDATION_RINGDOWN.md) e [`PEAK_DETECTION_VALIDATION.csv`](./PEAK_DETECTION_VALIDATION.csv)
+
+---
+
+## 🇧🇷 PT-BR
+
+### Visão Geral
+
+O **ISF Analyzer** lê arquivos binários `.ISF` exportados por osciloscópios Tektronix, converte os dados para unidades físicas e oferece uma interface Streamlit para inspeção, comparação e extração de métricas de sinais pulsados. O fluxo principal foi pensado para análise de ringing/ringdown em janelas configuráveis, com seleção visual de picos e diagnóstico por arquivo.
+
+O projeto separa a interface (`app.py`) das rotinas de análise (`ensaisf/analysis.py`) e do parser Tektronix (`ensaisf/isf_parser.py`), facilitando validação e manutenção.
+
+### Funcionalidades
+
+- Upload local de um ou vários arquivos `.ISF`.
+- Parser Tektronix robusto para bloco binário `:CURV #`.
+- Conversão para tempo e amplitude usando metadados do cabeçalho (`XINCR`, `XZERO`, `YMULT`, `YOFF`, `YZERO`).
+- Correção de baseline e métricas de forma de onda.
+- Abas de análise para **Sinais**, **Envelope**, **Comparação** e **Potência**.
+- Detecção de picos de ringdown por arquivo antes da sobreposição visual.
+- Seleção automática ou manual de picos no Envelope.
+- Comparação normalizada entre curvas.
+- Métricas de deslocamento de ressonância, similaridade e decaimento.
+- Análise de potência para pares tensão/corrente.
+- Exportação e inspeção de metadados/cabeçalho bruto dos arquivos.
+- Paleta fixa por ordem de curva para manter consistência visual entre abas.
+
+### Estrutura
+
+| Arquivo | Descrição |
+|---|---|
+| `app.py` | Aplicação Streamlit e fluxo de interface |
+| `ensaisf/isf_parser.py` | Parser de arquivos Tektronix `.ISF` |
+| `ensaisf/analysis.py` | Métricas, janelas, picos, ringdown, comparação e potência |
+| `requirements.txt` | Dependências Python |
+| `run_windows.bat` | Atalho de execução no Windows |
+| `run_linux_mac.sh` | Atalho de execução no Linux/macOS |
+| `CHANGELOG.md` | Histórico de versões |
+| `VALIDATION_RINGDOWN.md` | Registro da validação do detector de ringdown |
+| `PEAK_DETECTION_VALIDATION.csv` | Saída tabular da validação dos picos |
+| `AUDIT_REPORT.md` | Auditoria técnica do fluxo validado |
+
+### Instalação
+
+```powershell
+python -m venv .venv
+.\.venv\Scripts\Activate.ps1
+pip install -r requirements.txt
+```
+
+No Linux/macOS:
 
 ```bash
+python -m venv .venv
+source .venv/bin/activate
 pip install -r requirements.txt
+```
+
+### Execução
+
+```powershell
 streamlit run app.py
 ```
 
-On Windows, you can also run:
+No Windows, também é possível usar:
 
 ```bat
 run_windows.bat
 ```
 
-## v0.3.15 isolated state and palette refinement
+No Linux/macOS:
 
-This package keeps the validated Envelope workflow and fixes the remaining per-tab state issue:
+```bash
+./run_linux_mac.sh
+```
 
-- Internal app version updated to `0.3.15-select-all-refresh`.
-- File uploads remain global, but each analysis operation now has independent file-selection state.
-- **Sinais** can show one or multiple uploaded files.
-- **Envelope** can show 1 to 4 files in the same axis and keeps its own selection when switching tabs.
-- **Comparação** is intentionally limited to exactly two selections: reference versus compared.
-- **Potência** is intentionally limited to exactly two selections: voltage channel and current channel.
-- Adding a new `.ISF` file automatically synchronizes Sinais and Envelope without being overwritten by Comparação or Potência.
-- The Envelope image-click plot is rebuilt only after real upload changes, preserving valid peak selections.
-- Global color order remains standardized across **Sinais**, **Envelope**, **Comparação** and **Potência**.
-- Default color order: 1st curve orange, 2nd curve blue, then green, charcoal, magenta, teal, golden brown and brown.
-- Verified Streamlit calls use `width="stretch"` rather than deprecated `use_container_width=True`.
-- Verified the app name remains **ISF Analyzer**.
-- Verified Envelope defaults: start = -100 µs, end = 500 µs, 4 peaks per curve, criterion = **Últimos N picos**.
+### Fluxo de Envelope
 
-## Envelope workflow
+1. Carregue de 1 a 4 arquivos `.ISF`.
+2. Ajuste a janela de ringing, o limiar de pico e a distância mínima entre picos.
+3. Use a seleção automática para iniciar com N picos por curva.
+4. Clique em um pico selecionado para removê-lo ou em um candidato para adicioná-lo.
+5. O ajuste de envelope e as comparações normalizadas são atualizados automaticamente.
 
-The **Envelope** operation follows the dominant-positive-peak workflow:
+### Validação
 
-1. Choose 1 to 4 `.ISF` files.
-2. Adjust the ringdown window, peak threshold and minimum peak distance.
-3. The Envelope plot shows the complete waveform trace for context.
-4. The app keeps only the dominant positive local maxima as visible clickable candidates.
-5. Enable **Auto-selecionar** and choose **Picos por curva** to start with N peaks already selected in red.
-6. Click a selected peak to remove it, or a candidate peak to add it.
-7. Envelope fits and normalized comparisons update automatically.
+```powershell
+python -m py_compile app.py ensaisf\analysis.py ensaisf\isf_parser.py
+```
+
+O detector validado em `v0.3.24` processa cada forma de onda individualmente, identifica a maior crista de ressonância forçada e acompanha as cristas naturais seguintes usando o período estimado. Consulte [`VALIDATION_RINGDOWN.md`](./VALIDATION_RINGDOWN.md) para detalhes.
+
+### Observações Técnicas
+
+- A aplicação é local; os arquivos enviados pelo usuário são processados no ambiente Streamlit em execução.
+- A seleção por clique no Envelope depende de `streamlit-image-coordinates`. Sem esse pacote, o app continua abrindo, mas a seleção por clique fica indisponível.
+- Arquivos `.ISF` com cabeçalhos incompletos ou formatos binários não previstos podem gerar erro de parsing.
+- Para manter reprodutibilidade, registre a versão do app, os parâmetros da janela de análise e os arquivos usados na validação.
+
+### Licença
+
+Distribuído sob **MIT**. Veja [`LICENSE`](./LICENSE).
+
+---
+
+## 🇺🇸 English
+
+### Overview
+
+**ISF Analyzer** reads Tektronix `.ISF` binary waveform files, converts them to physical units, and provides a Streamlit interface for signal inspection, comparison, and metric extraction. The main workflow targets pulse, ringing and ringdown analysis with configurable windows, visual peak selection, and per-file diagnostics.
+
+The project keeps the UI (`app.py`) separate from analysis routines (`ensaisf/analysis.py`) and the Tektronix parser (`ensaisf/isf_parser.py`) to simplify validation and maintenance.
+
+### Features
+
+- Local upload of one or multiple `.ISF` files.
+- Robust Tektronix parser for binary `:CURV #` blocks.
+- Time and amplitude conversion from header metadata (`XINCR`, `XZERO`, `YMULT`, `YOFF`, `YZERO`).
+- Baseline correction and waveform metrics.
+- Analysis tabs for **Signals**, **Envelope**, **Comparison**, and **Power**.
+- Per-file ringdown peak detection before visual overlay.
+- Automatic or manual peak selection in the Envelope workflow.
+- Normalized curve comparison.
+- Resonance shift, similarity, and decay metrics.
+- Power analysis for voltage/current pairs.
+- Export plus metadata/raw-header inspection.
+- Fixed curve color order across tabs for visual consistency.
+
+### Structure
+
+| File | Description |
+|---|---|
+| `app.py` | Streamlit application and UI flow |
+| `ensaisf/isf_parser.py` | Tektronix `.ISF` parser |
+| `ensaisf/analysis.py` | Metrics, windows, peaks, ringdown, comparison and power routines |
+| `requirements.txt` | Python dependencies |
+| `run_windows.bat` | Windows launcher |
+| `run_linux_mac.sh` | Linux/macOS launcher |
+| `CHANGELOG.md` | Release history |
+| `VALIDATION_RINGDOWN.md` | Ringdown detector validation notes |
+| `PEAK_DETECTION_VALIDATION.csv` | Tabular peak-validation output |
+| `AUDIT_REPORT.md` | Technical audit of the validated workflow |
+
+### Installation
+
+```powershell
+python -m venv .venv
+.\.venv\Scripts\Activate.ps1
+pip install -r requirements.txt
+```
+
+On Linux/macOS:
+
+```bash
+python -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt
+```
+
+### Run
+
+```powershell
+streamlit run app.py
+```
+
+On Windows, you can also use:
+
+```bat
+run_windows.bat
+```
+
+On Linux/macOS:
+
+```bash
+./run_linux_mac.sh
+```
+
+### Envelope Workflow
+
+1. Upload 1 to 4 `.ISF` files.
+2. Adjust the ringing window, peak threshold, and minimum peak distance.
+3. Use automatic selection to start with N peaks per curve.
+4. Click a selected peak to remove it, or a candidate peak to add it.
+5. Envelope fitting and normalized comparisons update automatically.
+
+### Validation
+
+```powershell
+python -m py_compile app.py ensaisf\analysis.py ensaisf\isf_parser.py
+```
+
+The detector validated in `v0.3.24` processes each waveform independently, identifies the largest forced-resonance crest, and tracks the following natural crests using the estimated period. See [`VALIDATION_RINGDOWN.md`](./VALIDATION_RINGDOWN.md) for details.
+
+### Technical Notes
+
+- The application is local; uploaded files are processed by the running Streamlit environment.
+- Click-based Envelope selection depends on `streamlit-image-coordinates`. Without it, the app still runs, but click selection is unavailable.
+- `.ISF` files with incomplete headers or unsupported binary formats may raise parsing errors.
+- For reproducibility, record the app version, analysis-window parameters, and files used for validation.
+
+### License
+
+Distributed under **MIT**. See [`LICENSE`](./LICENSE).
