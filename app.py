@@ -30,6 +30,14 @@ from ensaisf.analysis import (
     waveform_metrics,
     waveform_similarity_metrics,
 )
+from ensaisf.channels import (
+    classify_signal_name,
+    item_label,
+    matching_current_for_voltage,
+    names_for_role,
+    role_counts,
+    sort_items_by_pulse,
+)
 from ensaisf.isf_parser import read_isf_bytes
 
 
@@ -40,7 +48,7 @@ st.set_page_config(
 )
 
 
-APP_VERSION = "0.3.24-validated-ringdown-tracker"
+APP_VERSION = "0.4.1-channel-aware-statistics-no-validation-csv"
 
 
 # Global color order used by all analysis screens.
@@ -82,6 +90,182 @@ def _format_metric(value: float, unit: str = "", precision: int = 4) -> str:
     except (TypeError, ValueError):
         return "—"
     return f"{float(value):.{precision}g} {unit}".strip()
+
+
+def _safe_percent_change(before: float, after: float) -> float:
+    """Return percentage change, guarding against zero/invalid values."""
+    try:
+        before_f = float(before)
+        after_f = float(after)
+    except (TypeError, ValueError):
+        return float("nan")
+    if not np.isfinite(before_f) or not np.isfinite(after_f) or abs(before_f) < 1e-30:
+        return float("nan")
+    return float(100.0 * (after_f - before_f) / before_f)
+
+
+def _linear_trend_r2(x: np.ndarray, y: np.ndarray) -> tuple[float, float]:
+    """Return slope and R² for a first-order sequence trend."""
+    mask = np.isfinite(x) & np.isfinite(y)
+    if np.count_nonzero(mask) < 2:
+        return float("nan"), float("nan")
+    x_m = x[mask].astype(float)
+    y_m = y[mask].astype(float)
+    if np.allclose(x_m, x_m[0]) or np.allclose(y_m, y_m[0]):
+        return float("nan"), float("nan")
+    slope, intercept = np.polyfit(x_m, y_m, deg=1)
+    y_hat = slope * x_m + intercept
+    ss_res = float(np.sum((y_m - y_hat) ** 2))
+    ss_tot = float(np.sum((y_m - np.mean(y_m)) ** 2))
+    r2 = 1.0 - ss_res / ss_tot if ss_tot > 0 else float("nan")
+    return float(slope), float(r2)
+
+
+def _find_item_by_name(waveforms: list[dict], name: str) -> dict:
+    """Return one waveform item by filename."""
+    return next(item for item in waveforms if item["name"] == name)
+
+
+def _format_signal_label(name: str, waveforms: list[dict]) -> str:
+    """Format a selector option using channel metadata."""
+    try:
+        return item_label(_find_item_by_name(waveforms, name))
+    except StopIteration:
+        return name
+
+
+def _select_signal_name(
+    container,
+    label: str,
+    options: list[str],
+    key: str,
+    waveforms: list[dict],
+    preferred_index: int = 0,
+) -> str | None:
+    """Render a channel-aware selectbox and keep its state valid."""
+    if not options:
+        container.warning(f"Nenhum arquivo disponível para: {label}.")
+        return None
+    preferred_index = min(max(int(preferred_index), 0), len(options) - 1)
+    if st.session_state.get(key) not in options:
+        st.session_state[key] = options[preferred_index]
+    return container.selectbox(
+        label,
+        options,
+        key=key,
+        format_func=lambda name: _format_signal_label(name, waveforms),
+    )
+
+
+def add_channel_columns(metrics_df: pd.DataFrame, waveforms: list[dict]) -> pd.DataFrame:
+    """Add filename-derived channel metadata to a metrics table."""
+    if metrics_df.empty or "arquivo" not in metrics_df.columns:
+        return metrics_df
+    metadata_by_name = {
+        item["name"]: {
+            "tipo_sinal": item.get("role_label", "Não classificado"),
+            "canal": item.get("channel"),
+            "pulso": item.get("pulse_index"),
+        }
+        for item in waveforms
+    }
+    out = metrics_df.copy()
+    for column in ["tipo_sinal", "canal", "pulso"]:
+        if column in out.columns:
+            out = out.drop(columns=[column])
+    out.insert(1, "tipo_sinal", out["arquivo"].map(lambda name: metadata_by_name.get(name, {}).get("tipo_sinal")))
+    out.insert(2, "canal", out["arquivo"].map(lambda name: metadata_by_name.get(name, {}).get("canal")))
+    out.insert(3, "pulso", out["arquivo"].map(lambda name: metadata_by_name.get(name, {}).get("pulso")))
+    return out
+
+
+def sequence_trend_table(metrics_df: pd.DataFrame, waveforms: list[dict]) -> pd.DataFrame:
+    """Summarize non-redundant pulse-sequence trends by signal role."""
+    metrics_with_channels = add_channel_columns(metrics_df, waveforms)
+    if metrics_with_channels.empty:
+        return pd.DataFrame()
+
+    rows = []
+    for role_label, expected_behavior in [
+        ("Tensão", "esperado: decaimento de amplitude"),
+        ("Corrente", "esperado: acréscimo de amplitude"),
+    ]:
+        group = metrics_with_channels[metrics_with_channels["tipo_sinal"] == role_label].copy()
+        group = group[np.isfinite(pd.to_numeric(group["pulso"], errors="coerce"))]
+        group = group.sort_values("pulso")
+        if len(group) < 2:
+            continue
+
+        pulses = group["pulso"].to_numpy(dtype=float)
+        peak_abs = group["pico_abs_corrigido"].to_numpy(dtype=float)
+        vpp = group["v_pp"].to_numpy(dtype=float)
+        rms = group["rms_corrigido"].to_numpy(dtype=float)
+
+        step_changes = [
+            _safe_percent_change(peak_abs[idx - 1], peak_abs[idx])
+            for idx in range(1, len(peak_abs))
+        ]
+        step_changes = np.array(step_changes, dtype=float)
+        finite_steps = step_changes[np.isfinite(step_changes)]
+        mean_step = float(np.mean(finite_steps)) if len(finite_steps) else float("nan")
+        std_step = float(np.std(finite_steps, ddof=1)) if len(finite_steps) > 1 else float("nan")
+        first_last_peak = _safe_percent_change(peak_abs[0], peak_abs[-1])
+        first_last_vpp = _safe_percent_change(vpp[0], vpp[-1])
+        first_last_rms = _safe_percent_change(rms[0], rms[-1])
+        slope, trend_r2 = _linear_trend_r2(pulses, peak_abs)
+
+        if role_label == "Tensão":
+            observed = "decaimento" if np.isfinite(mean_step) and mean_step < 0 else "sem decaimento claro"
+        else:
+            observed = "acréscimo" if np.isfinite(mean_step) and mean_step > 0 else "sem acréscimo claro"
+
+        rows.append(
+            {
+                "tipo_sinal": role_label,
+                "n_pulsos": int(len(group)),
+                "pulso_inicial": int(pulses[0]),
+                "pulso_final": int(pulses[-1]),
+                "pico_abs_inicial": float(peak_abs[0]),
+                "pico_abs_final": float(peak_abs[-1]),
+                "delta_pico_abs_primeiro_ultimo_%": first_last_peak,
+                "media_delta_pico_abs_por_pulso_%": mean_step,
+                "desvio_delta_pico_abs_por_pulso_%": std_step,
+                "delta_vpp_primeiro_ultimo_%": first_last_vpp,
+                "delta_rms_primeiro_ultimo_%": first_last_rms,
+                "slope_pico_abs_por_pulso": slope,
+                "r2_tendencia_pico_abs": trend_r2,
+                "leitura": f"{observed}; {expected_behavior}",
+            }
+        )
+
+    return pd.DataFrame(rows)
+
+
+def plot_sequence_trend(metrics_df: pd.DataFrame, waveforms: list[dict], role_label: str) -> go.Figure:
+    """Plot peak amplitude across pulse index for one signal type."""
+    data = add_channel_columns(metrics_df, waveforms)
+    data = data[data["tipo_sinal"] == role_label].copy()
+    data = data.sort_values("pulso")
+    fig = go.Figure()
+    if not data.empty:
+        fig.add_trace(
+            go.Scatter(
+                x=data["pulso"],
+                y=data["pico_abs_corrigido"],
+                mode="lines+markers",
+                name=f"Pico absoluto — {role_label}",
+            )
+        )
+    fig.update_layout(
+        height=360,
+        xaxis_title="Pulso",
+        yaxis_title="Pico absoluto corrigido",
+        hovermode="x unified",
+        margin=dict(l=40, r=20, t=30, b=40),
+    )
+    fig.update_xaxes(showgrid=True)
+    fig.update_yaxes(showgrid=True)
+    return fig
 
 
 @st.cache_data(show_spinner=False)
@@ -2420,7 +2604,7 @@ def build_waveform_metrics_table(
         )
         for item in waveforms
     ]
-    return rows, metrics_dataframe(rows)
+    return rows, add_channel_columns(metrics_dataframe(rows), waveforms)
 
 
 def build_ring_metrics_table(
@@ -2446,7 +2630,7 @@ def build_ring_metrics_table(
         )
         for item in waveforms
     ]
-    return rows, metrics_dataframe(rows)
+    return rows, add_channel_columns(metrics_dataframe(rows), waveforms)
 
 
 st.title("⚡ ISF Analyzer")
@@ -2547,6 +2731,7 @@ errors: list[str] = []
 for idx, file in enumerate(uploaded_files):
     try:
         item = parse_uploaded_file(file.name, file.getvalue())
+        item.update(classify_signal_name(file.name).as_dict())
         item["series_color_rgb"] = SERIES_COLORS_RGB[idx % len(SERIES_COLORS_RGB)]
         item["series_color_hex"] = SERIES_COLORS_HEX[idx % len(SERIES_COLORS_HEX)]
         waveforms.append(item)
@@ -2657,6 +2842,14 @@ with tab_signal:
     summary_cols[2].metric("Carga", _format_metric(resistance_ohm, "Ω"))
     summary_cols[3].metric("Amostras", f"{sum(len(item['value']) for item in waveforms):,}".replace(",", "."))
 
+    counts = role_counts(waveforms)
+    st.caption(
+        "Classificação automática: "
+        f"{counts['voltage']} tensão (CH1), "
+        f"{counts['current']} corrente (CH2), "
+        f"{counts['unknown']} não classificado."
+    )
+
     analysis_mode = st.radio(
         "Operação",
         ["Sinais", "Envelope", "Comparação", "Potência"],
@@ -2683,25 +2876,44 @@ with tab_signal:
             threshold_fraction=threshold_fraction,
             baseline_mode=baseline_mode,
         )
-        control_cols = st.columns(4)
-        selected_names = control_cols[0].multiselect(
-            "Arquivos",
-            [item["name"] for item in waveforms],
-            default=list(st.session_state.get("signals_selected_v0314", [item["name"] for item in waveforms])),
-            key="signals_selected_v0314",
+        control_cols = st.columns(5)
+        signal_filter = control_cols[0].selectbox(
+            "Tipo",
+            ["Todos", "Tensão", "Corrente", "Não classificado"],
+            key="signals_role_filter_v040",
+            help="Filtro visual. A classificação vem automaticamente do nome TXXXXCH1/CH2.",
         )
-        normalize = control_cols[1].checkbox(
+        role_filter_map = {
+            "Todos": None,
+            "Tensão": "voltage",
+            "Corrente": "current",
+            "Não classificado": "unknown",
+        }
+        signal_options = names_for_role(waveforms, role_filter_map[signal_filter])
+        current_selection = list(st.session_state.get("signals_selected_v0314", signal_options))
+        current_selection = [name for name in current_selection if name in signal_options]
+        if not current_selection:
+            current_selection = signal_options
+        st.session_state["signals_selected_v0314"] = current_selection
+        selected_names = control_cols[1].multiselect(
+            "Arquivos",
+            signal_options,
+            default=current_selection,
+            key="signals_selected_v0314",
+            format_func=lambda name: _format_signal_label(name, waveforms),
+        )
+        normalize = control_cols[2].checkbox(
             "Normalizar",
             value=False,
             key="signals_normalize_v026",
             help="Divide cada sinal pelo próprio pico absoluto.",
         )
-        corrected_overview = control_cols[2].checkbox(
+        corrected_overview = control_cols[3].checkbox(
             "Remover baseline",
             value=True,
             key="signals_corrected_v026",
         )
-        use_custom_window = control_cols[3].checkbox(
+        use_custom_window = control_cols[4].checkbox(
             "Recortar janela",
             value=False,
             key="signals_window_enable_v026",
@@ -2740,10 +2952,13 @@ with tab_signal:
             )
             st.plotly_chart(fig, width="stretch", key="signals_waveform_chart_v026")
 
-        selected_metric_name = st.selectbox(
+        selected_metric_name = _select_signal_name(
+            st,
             "Resumo do arquivo",
-            [item["name"] for item in waveforms],
-            key="signals_metric_file_v0314",
+            [item["name"] for item in sort_items_by_pulse(waveforms)],
+            "signals_metric_file_v0314",
+            waveforms,
+            preferred_index=0,
         )
         selected_metrics = next(row for row in metrics if row["arquivo"] == selected_metric_name)
         cols = st.columns(5)
@@ -2764,14 +2979,30 @@ with tab_signal:
         )
 
         st.markdown("**1) Arquivos e janela de análise**")
-        file_names = [item["name"] for item in waveforms]
+        envelope_filter = st.selectbox(
+            "Tipo de sinal para Envelope",
+            ["Todos", "Tensão", "Corrente", "Não classificado"],
+            key="envelope_role_filter_v040",
+            help="Use este filtro para estudar o decaimento separadamente em tensão ou corrente, sem misturar canais por engano.",
+        )
+        envelope_role_map = {
+            "Todos": None,
+            "Tensão": "voltage",
+            "Corrente": "current",
+            "Não classificado": "unknown",
+        }
+        file_names = names_for_role(waveforms, envelope_role_map[envelope_filter])
         default_files = list(st.session_state.get("envelope_files_v0315", file_names))
         default_files = [name for name in default_files if name in file_names]
+        if not default_files:
+            default_files = file_names
+        st.session_state["envelope_files_v0315"] = default_files
         env_selected_names = st.multiselect(
             "Arquivos no mesmo eixo",
             file_names,
             default=default_files,
             key="envelope_files_v0315",
+            format_func=lambda name: _format_signal_label(name, waveforms),
             help="Selecione um ou mais arquivos. A opção 'Select all' agora mantém todos os arquivos carregados no Envelope.",
         )
         if len(env_selected_names) > 6:
@@ -3140,18 +3371,23 @@ with tab_signal:
     elif analysis_mode == "Comparação":
         st.subheader("Comparação")
         st.caption(
-            "Comparação direta entre exatamente 2 arquivos: Referência × Comparado. "
-            "Esta seleção é independente da aba Envelope."
+            "Escolha o tipo de par. A tela evita misturar métricas de unidades diferentes: "
+            "V×I mostra atraso/correlação; Tensão×Tensão e Corrente×Corrente mostram também Δ de ringing."
         )
-        ring_cols = st.columns(2)
-        cmp_start_us = ring_cols[0].number_input(
+        ring_cols = st.columns(3)
+        comparison_kind = ring_cols[0].selectbox(
+            "Tipo de comparação",
+            ["Tensão × Corrente", "Corrente × Corrente", "Tensão × Tensão", "Personalizada"],
+            key="comparison_kind_v040",
+        )
+        cmp_start_us = ring_cols[1].number_input(
             "Início da janela (µs)",
             value=ring_start_us,
             step=1.0,
             format="%.3f",
             key="comparison_start_us_v026",
         )
-        cmp_end_us = ring_cols[1].number_input(
+        cmp_end_us = ring_cols[2].number_input(
             "Fim da janela (µs)",
             value=ring_end_us,
             step=1.0,
@@ -3159,98 +3395,206 @@ with tab_signal:
             key="comparison_end_us_v026",
         )
         if len(waveforms) < 2:
-            st.warning("Carregue pelo menos dois arquivos para comparar antes e depois.")
+            st.warning("Carregue pelo menos dois arquivos para comparar.")
         else:
-            col_ba_1, col_ba_2 = st.columns(2)
-            before_name = col_ba_1.selectbox(
-                "Antes",
-                [item["name"] for item in waveforms],
-                index=0,
-                key="comparison_before_v0314",
-            )
-            after_name = col_ba_2.selectbox(
-                "Depois",
-                [item["name"] for item in waveforms],
-                index=min(1, len(waveforms) - 1),
-                key="comparison_after_v0314",
-            )
-            if before_name == after_name:
-                st.warning("Selecione dois arquivos diferentes para uma comparação física útil.")
-            before_item = next(item for item in waveforms if item["name"] == before_name)
-            after_item = next(item for item in waveforms if item["name"] == after_name)
-            before_ring = ringdown_metrics(
-                before_name,
-                before_item["time_s"],
-                before_item["value"],
-                start_us=cmp_start_us,
-                end_us=cmp_end_us,
-                baseline_mode=baseline_mode,
-                resistance_ohm=resistance_ohm,
-                peak_threshold_fraction=peak_threshold_fraction,
-                min_peak_distance_us=min_peak_distance_us,
-            )
-            after_ring = ringdown_metrics(
-                after_name,
-                after_item["time_s"],
-                after_item["value"],
-                start_us=cmp_start_us,
-                end_us=cmp_end_us,
-                baseline_mode=baseline_mode,
-                resistance_ohm=resistance_ohm,
-                peak_threshold_fraction=peak_threshold_fraction,
-                min_peak_distance_us=min_peak_distance_us,
-            )
+            voltage_names = names_for_role(waveforms, "voltage")
+            current_names = names_for_role(waveforms, "current")
+            all_names = [item["name"] for item in sort_items_by_pulse(waveforms)]
 
-            compare_df = compare_ringdown_metrics(before_ring, after_ring)
-            shift_score = resonance_shift_score(compare_df)
-            similarity = waveform_similarity_metrics(
-                before_name,
-                before_item["time_s"],
-                before_item["value"],
-                after_name,
-                after_item["time_s"],
-                after_item["value"],
-                start_us=cmp_start_us,
-                end_us=cmp_end_us,
-                baseline_mode=baseline_mode,
-            )
+            if comparison_kind == "Tensão × Corrente":
+                left_options = voltage_names
+                right_options = current_names
+                left_label = "Tensão (CH1)"
+                right_label = "Corrente (CH2)"
+            elif comparison_kind == "Corrente × Corrente":
+                left_options = current_names
+                right_options = current_names
+                left_label = "Corrente de referência"
+                right_label = "Corrente comparada"
+            elif comparison_kind == "Tensão × Tensão":
+                left_options = voltage_names
+                right_options = voltage_names
+                left_label = "Tensão de referência"
+                right_label = "Tensão comparada"
+            else:
+                left_options = all_names
+                right_options = all_names
+                left_label = "Sinal de referência"
+                right_label = "Sinal comparado"
 
-            cols = st.columns(5)
-            metric_map = {row["metrica"]: row["delta_percent"] for _, row in compare_df.iterrows()}
-            cols[0].metric("Δ período", _format_metric(metric_map.get("period_peaks_us"), "%"))
-            cols[1].metric("Δ frequência", _format_metric(metric_map.get("freq_damped_khz"), "%"))
-            cols[2].metric("Δ τ", _format_metric(metric_map.get("tau_envelope_us"), "%"))
-            cols[3].metric("Δ Q", _format_metric(metric_map.get("quality_factor_q"), "%"))
-            cols[4].metric("Δ energia", _format_metric(metric_map.get("ring_energy_resistive_j"), "%"))
+            if not left_options or not right_options:
+                st.warning("Não há arquivos suficientes para este tipo de comparação com a regra CH1=tensão e CH2=corrente.")
+            else:
+                col_ba_1, col_ba_2 = st.columns(2)
+                before_name = _select_signal_name(
+                    col_ba_1,
+                    left_label,
+                    left_options,
+                    "comparison_before_v040",
+                    waveforms,
+                    preferred_index=0,
+                )
+                preferred_right = 1 if len(right_options) > 1 else 0
+                after_name = _select_signal_name(
+                    col_ba_2,
+                    right_label,
+                    right_options,
+                    "comparison_after_v040",
+                    waveforms,
+                    preferred_index=preferred_right,
+                )
+                if before_name is None or after_name is None:
+                    st.stop()
+                if before_name == after_name:
+                    st.warning("Selecione dois arquivos diferentes para uma comparação física útil.")
 
-            cols = st.columns(4)
-            cols[0].metric("Shift score", _format_metric(shift_score, "%"))
-            cols[1].metric("Correlação", _format_metric(similarity["pearson_r"], ""))
-            cols[2].metric("NRMSE", _format_metric(similarity["nrmse"], ""))
-            cols[3].metric("Atraso", _format_metric(similarity["delay_xcorr_us"], "µs"))
+                before_item = _find_item_by_name(waveforms, before_name)
+                after_item = _find_item_by_name(waveforms, after_name)
+                same_role = before_item.get("role") == after_item.get("role") and before_item.get("role") != "unknown"
 
-            normalize_ba = st.checkbox(
-                "Normalizar curvas",
-                value=False,
-                key="comparison_normalize_v026",
+                similarity = waveform_similarity_metrics(
+                    before_name,
+                    before_item["time_s"],
+                    before_item["value"],
+                    after_name,
+                    after_item["time_s"],
+                    after_item["value"],
+                    start_us=cmp_start_us,
+                    end_us=cmp_end_us,
+                    baseline_mode=baseline_mode,
+                )
+
+                if same_role:
+                    before_ring = ringdown_metrics(
+                        before_name,
+                        before_item["time_s"],
+                        before_item["value"],
+                        start_us=cmp_start_us,
+                        end_us=cmp_end_us,
+                        baseline_mode=baseline_mode,
+                        resistance_ohm=resistance_ohm,
+                        peak_threshold_fraction=peak_threshold_fraction,
+                        min_peak_distance_us=min_peak_distance_us,
+                    )
+                    after_ring = ringdown_metrics(
+                        after_name,
+                        after_item["time_s"],
+                        after_item["value"],
+                        start_us=cmp_start_us,
+                        end_us=cmp_end_us,
+                        baseline_mode=baseline_mode,
+                        resistance_ohm=resistance_ohm,
+                        peak_threshold_fraction=peak_threshold_fraction,
+                        min_peak_distance_us=min_peak_distance_us,
+                    )
+                    compare_df = compare_ringdown_metrics(before_ring, after_ring)
+                    shift_score = resonance_shift_score(compare_df)
+
+                    cols = st.columns(5)
+                    metric_map = {row["metrica"]: row["delta_percent"] for _, row in compare_df.iterrows()}
+                    cols[0].metric("Δ período", _format_metric(metric_map.get("period_peaks_us"), "%"))
+                    cols[1].metric("Δ frequência", _format_metric(metric_map.get("freq_damped_khz"), "%"))
+                    cols[2].metric("Δ τ", _format_metric(metric_map.get("tau_envelope_us"), "%"))
+                    cols[3].metric("Δ Q", _format_metric(metric_map.get("quality_factor_q"), "%"))
+                    cols[4].metric("Δ energia", _format_metric(metric_map.get("ring_energy_resistive_j"), "%"))
+
+                    cols = st.columns(4)
+                    cols[0].metric("Shift score", _format_metric(shift_score, "%"))
+                    cols[1].metric("Correlação", _format_metric(similarity["pearson_r"], ""))
+                    cols[2].metric("NRMSE", _format_metric(similarity["nrmse"], ""))
+                    cols[3].metric("Atraso", _format_metric(similarity["delay_xcorr_us"], "µs"))
+                else:
+                    st.info(
+                        "Par com unidades diferentes. Por isso, a comparação aqui fica em atraso/correlação "
+                        "e forma normalizada. Energia, impedância e fase V×I ficam exclusivamente em Potência."
+                    )
+                    cols = st.columns(4)
+                    cols[0].metric("Correlação", _format_metric(similarity["pearson_r"], ""))
+                    cols[1].metric("NRMSE", _format_metric(similarity["nrmse"], ""))
+                    cols[2].metric("Atraso", _format_metric(similarity["delay_xcorr_us"], "µs"))
+                    cols[3].metric("xcorr", _format_metric(similarity["xcorr_peak"], ""))
+                    compare_df = pd.DataFrame([similarity])
+
+                normalize_ba = st.checkbox(
+                    "Normalizar curvas",
+                    value=not same_role,
+                    key="comparison_normalize_v040",
+                    help="Recomendado para V×I, porque tensão e corrente possuem escalas físicas diferentes.",
+                )
+                fig_ba = plot_waveforms(
+                    [before_item, after_item],
+                    normalize=normalize_ba,
+                    corrected=True,
+                    baseline_mode=baseline_mode,
+                    max_points=max_plot_points,
+                    start_us=cmp_start_us,
+                    end_us=cmp_end_us,
+                )
+                st.plotly_chart(fig_ba, width="stretch", key="comparison_overlay_chart_v040")
+                st.dataframe(compare_df, width="stretch")
+                st.download_button(
+                    "Baixar comparação em CSV",
+                    data=compare_df.to_csv(index=False).encode("utf-8"),
+                    file_name="comparacao_sinais.csv",
+                    mime="text/csv",
+                    key="download_comparison_v040",
+                )
+
+        st.divider()
+        st.markdown("**Tendência automática da sequência carregada**")
+        st.caption(
+            "Esta análise resume a evolução por pulso sem repetir as métricas das outras telas: "
+            "decaimento médio de amplitude para tensão e acréscimo médio para corrente, quando existirem CH1/CH2 suficientes."
+        )
+        _, trend_metrics_df = build_waveform_metrics_table(
+            waveforms,
+            gap_mm=gap_mm,
+            resistance_ohm=resistance_ohm,
+            threshold_fraction=threshold_fraction,
+            baseline_mode=baseline_mode,
+        )
+        trend_df = sequence_trend_table(trend_metrics_df, waveforms)
+        if trend_df.empty:
+            st.info("Carregue pelo menos dois pulsos do mesmo tipo de sinal para estimar tendência por sequência.")
+        else:
+            trend_cols = st.columns(2)
+            voltage_trend = trend_df[trend_df["tipo_sinal"] == "Tensão"]
+            current_trend = trend_df[trend_df["tipo_sinal"] == "Corrente"]
+            if not voltage_trend.empty:
+                row = voltage_trend.iloc[0]
+                trend_cols[0].metric(
+                    "Tensão: média Δ pico/pulso",
+                    _format_metric(row["media_delta_pico_abs_por_pulso_%"], "%"),
+                )
+            else:
+                trend_cols[0].metric("Tensão: média Δ pico/pulso", "—")
+            if not current_trend.empty:
+                row = current_trend.iloc[0]
+                trend_cols[1].metric(
+                    "Corrente: média Δ pico/pulso",
+                    _format_metric(row["media_delta_pico_abs_por_pulso_%"], "%"),
+                )
+            else:
+                trend_cols[1].metric("Corrente: média Δ pico/pulso", "—")
+
+            plot_cols = st.columns(2)
+            plot_cols[0].plotly_chart(
+                plot_sequence_trend(trend_metrics_df, waveforms, "Tensão"),
+                width="stretch",
+                key="trend_voltage_chart_v040",
             )
-            fig_ba = plot_waveforms(
-                [before_item, after_item],
-                normalize=normalize_ba,
-                corrected=True,
-                baseline_mode=baseline_mode,
-                max_points=max_plot_points,
-                start_us=cmp_start_us,
-                end_us=cmp_end_us,
+            plot_cols[1].plotly_chart(
+                plot_sequence_trend(trend_metrics_df, waveforms, "Corrente"),
+                width="stretch",
+                key="trend_current_chart_v040",
             )
-            st.plotly_chart(fig_ba, width="stretch", key="comparison_overlay_chart_v026")
-            st.dataframe(compare_df, width="stretch")
+            st.dataframe(trend_df, width="stretch")
             st.download_button(
-                "Baixar comparação em CSV",
-                data=compare_df.to_csv(index=False).encode("utf-8"),
-                file_name="comparacao_antes_depois_ringdown.csv",
+                "Baixar tendência da sequência em CSV",
+                data=trend_df.to_csv(index=False).encode("utf-8"),
+                file_name="tendencia_sequencia_pulsos.csv",
                 mime="text/csv",
-                key="download_comparison_v026",
+                key="download_sequence_trend_v040",
             )
 
     elif analysis_mode == "Potência":
@@ -3260,21 +3604,35 @@ with tab_signal:
             "Esta seleção é independente das demais abas."
         )
 
-        if len(waveforms) < 2:
-            st.warning("Carregue pelo menos dois arquivos: um canal de tensão e um canal de corrente.")
+        voltage_options = names_for_role(waveforms, "voltage")
+        current_options = names_for_role(waveforms, "current")
+        if len(waveforms) < 2 or not voltage_options or not current_options:
+            st.warning(
+                "Carregue pelo menos um CH1 (tensão) e um CH2 (corrente). "
+                "A classificação automática usa TXXXXCH1 e TXXXXCH2 no nome do arquivo."
+            )
         else:
             col1, col2, col3 = st.columns(3)
-            voltage_name = col1.selectbox(
-                "Tensão",
-                [item["name"] for item in waveforms],
-                index=0,
-                key="power_voltage_v0314",
+            voltage_name = _select_signal_name(
+                col1,
+                "Tensão (CH1)",
+                voltage_options,
+                "power_voltage_v040",
+                waveforms,
+                preferred_index=0,
             )
-            current_name = col2.selectbox(
-                "Corrente",
-                [item["name"] for item in waveforms],
-                index=min(1, len(waveforms) - 1),
-                key="power_current_v0314",
+            voltage_item_for_match = _find_item_by_name(waveforms, voltage_name) if voltage_name else None
+            matched_current = matching_current_for_voltage(voltage_item_for_match, waveforms) if voltage_item_for_match else None
+            preferred_current_index = 0
+            if matched_current and matched_current["name"] in current_options:
+                preferred_current_index = current_options.index(matched_current["name"])
+            current_name = _select_signal_name(
+                col2,
+                "Corrente (CH2)",
+                current_options,
+                "power_current_v040",
+                waveforms,
+                preferred_index=preferred_current_index,
             )
             if voltage_name == current_name:
                 st.warning("Selecione canais diferentes para tensão e corrente antes de interpretar P(t)=V(t)I(t).")
@@ -3399,12 +3757,15 @@ with tab_export:
         st.info("Clique em 'Gerar métricas para exportação' quando precisar dos CSVs de métricas.")
 
     st.divider()
-    export_name = st.selectbox(
+    export_name = _select_signal_name(
+        st,
         "Exportar forma de onda",
-        [item["name"] for item in waveforms],
-        key="export_waveform_select_v0314",
+        [item["name"] for item in sort_items_by_pulse(waveforms)],
+        "export_waveform_select_v0314",
+        waveforms,
+        preferred_index=0,
     )
-    export_item = next(item for item in waveforms if item["name"] == export_name)
+    export_item = _find_item_by_name(waveforms, export_name)
 
     if st.button("Gerar CSV da forma de onda", key="prepare_waveform_csv_v035"):
         st.session_state["export_waveform_csv_v035"] = waveform_csv_bytes(export_item)

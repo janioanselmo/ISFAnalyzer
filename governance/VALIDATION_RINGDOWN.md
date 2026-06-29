@@ -37,4 +37,4 @@ The algorithm deliberately returns fewer than N peaks when the waveform does not
 
 ## Validation output
 
-See `PEAK_DETECTION_VALIDATION.csv` for the detailed per-file anchor, estimated period, selected peak times, and selected peak amplitudes.
+The previous `PEAK_DETECTION_VALIDATION.csv` artifact was removed from the distributed project package to avoid shipping temporary validation data. If needed, regenerate peak-validation tables from the current analysis workflow.

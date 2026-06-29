@@ -2,8 +2,9 @@
 
 Aplicativo local em Python/Streamlit para análise de formas de onda Tektronix `.ISF`, com foco em pulsos, ringing, ringdown, ressonância e experimentos de eletroporação.
 
-> Histórico de versões: [`CHANGELOG.md`](./CHANGELOG.md)
-> Relatórios de validação: [`VALIDATION_RINGDOWN.md`](./VALIDATION_RINGDOWN.md) e [`PEAK_DETECTION_VALIDATION.csv`](./PEAK_DETECTION_VALIDATION.csv)
+> Histórico de versões: [`governance/CHANGELOG.md`](./governance/CHANGELOG.md)
+> Governança/auditoria: [`governance/GOVERNANCE.md`](./governance/GOVERNANCE.md) e [`governance/AUDIT_2026-06-29_CHANNEL_STATISTICS.md`](./governance/AUDIT_2026-06-29_CHANNEL_STATISTICS.md)
+> Relatórios de validação: [`governance/VALIDATION_RINGDOWN.md`](./governance/VALIDATION_RINGDOWN.md)
 
 ---
 
@@ -21,12 +22,13 @@ O projeto separa a interface (`app.py`) das rotinas de análise (`ensaisf/analys
 - Parser Tektronix robusto para bloco binário `:CURV #`.
 - Conversão para tempo e amplitude usando metadados do cabeçalho (`XINCR`, `XZERO`, `YMULT`, `YOFF`, `YZERO`).
 - Correção de baseline e métricas de forma de onda.
-- Abas de análise para **Sinais**, **Envelope**, **Comparação** e **Potência**.
+- Operações de análise para **Sinais**, **Envelope**, **Comparação** e **Potência**, com seleção automática CH1/CH2.
 - Detecção de picos de ringdown por arquivo antes da sobreposição visual.
 - Seleção automática ou manual de picos no Envelope.
-- Comparação normalizada entre curvas.
+- Comparação normalizada entre curvas, incluindo Tensão×Corrente, Corrente×Corrente e Tensão×Tensão.
 - Métricas de deslocamento de ressonância, similaridade e decaimento.
-- Análise de potência para pares tensão/corrente.
+- Análise de potência para pares tensão/corrente com seletor restrito a CH1=tensão e CH2=corrente.
+- Estatísticas de sequência para decaimento médio de tensão e acréscimo médio de corrente.
 - Exportação e inspeção de metadados/cabeçalho bruto dos arquivos.
 - Paleta fixa por ordem de curva para manter consistência visual entre abas.
 
@@ -37,13 +39,15 @@ O projeto separa a interface (`app.py`) das rotinas de análise (`ensaisf/analys
 | `app.py` | Aplicação Streamlit e fluxo de interface |
 | `ensaisf/isf_parser.py` | Parser de arquivos Tektronix `.ISF` |
 | `ensaisf/analysis.py` | Métricas, janelas, picos, ringdown, comparação e potência |
+| `ensaisf/channels.py` | Classificação automática CH1=tensão e CH2=corrente |
 | `requirements.txt` | Dependências Python |
 | `run_windows.bat` | Atalho de execução no Windows |
 | `run_linux_mac.sh` | Atalho de execução no Linux/macOS |
-| `CHANGELOG.md` | Histórico de versões |
-| `VALIDATION_RINGDOWN.md` | Registro da validação do detector de ringdown |
-| `PEAK_DETECTION_VALIDATION.csv` | Saída tabular da validação dos picos |
-| `AUDIT_REPORT.md` | Auditoria técnica do fluxo validado |
+| `governance/CHANGELOG.md` | Histórico de versões |
+| `governance/GOVERNANCE.md` | Regras de governança, auditoria e não redundância |
+| `governance/VALIDATION_RINGDOWN.md` | Registro da validação do detector de ringdown |
+| `governance/AUDIT_REPORT.md` | Auditoria técnica do fluxo validado anterior |
+| `governance/AUDIT_2026-06-29_CHANNEL_STATISTICS.md` | Auditoria da atualização CH1/CH2 e estatísticas |
 
 ### Instalação
 
@@ -93,7 +97,7 @@ No Linux/macOS:
 python -m py_compile app.py ensaisf\analysis.py ensaisf\isf_parser.py
 ```
 
-O detector validado em `v0.3.24` processa cada forma de onda individualmente, identifica a maior crista de ressonância forçada e acompanha as cristas naturais seguintes usando o período estimado. Consulte [`VALIDATION_RINGDOWN.md`](./VALIDATION_RINGDOWN.md) para detalhes.
+O detector validado em `v0.3.24` processa cada forma de onda individualmente, identifica a maior crista de ressonância forçada e acompanha as cristas naturais seguintes usando o período estimado. Consulte [`governance/VALIDATION_RINGDOWN.md`](./governance/VALIDATION_RINGDOWN.md) para detalhes.
 
 ### Observações Técnicas
 
@@ -122,12 +126,13 @@ The project keeps the UI (`app.py`) separate from analysis routines (`ensaisf/an
 - Robust Tektronix parser for binary `:CURV #` blocks.
 - Time and amplitude conversion from header metadata (`XINCR`, `XZERO`, `YMULT`, `YOFF`, `YZERO`).
 - Baseline correction and waveform metrics.
-- Analysis tabs for **Signals**, **Envelope**, **Comparison**, and **Power**.
+- Analysis operations for **Signals**, **Envelope**, **Comparison**, and **Power**, with automatic CH1/CH2 selection.
 - Per-file ringdown peak detection before visual overlay.
 - Automatic or manual peak selection in the Envelope workflow.
-- Normalized curve comparison.
+- Normalized curve comparison, including Voltage×Current, Current×Current, and Voltage×Voltage.
 - Resonance shift, similarity, and decay metrics.
-- Power analysis for voltage/current pairs.
+- Power analysis for voltage/current pairs with selectors restricted to CH1=voltage and CH2=current.
+- Pulse-sequence statistics for mean voltage-amplitude decay and mean current-amplitude increase.
 - Export plus metadata/raw-header inspection.
 - Fixed curve color order across tabs for visual consistency.
 
@@ -138,13 +143,15 @@ The project keeps the UI (`app.py`) separate from analysis routines (`ensaisf/an
 | `app.py` | Streamlit application and UI flow |
 | `ensaisf/isf_parser.py` | Tektronix `.ISF` parser |
 | `ensaisf/analysis.py` | Metrics, windows, peaks, ringdown, comparison and power routines |
+| `ensaisf/channels.py` | Automatic CH1=voltage and CH2=current classification |
 | `requirements.txt` | Python dependencies |
 | `run_windows.bat` | Windows launcher |
 | `run_linux_mac.sh` | Linux/macOS launcher |
-| `CHANGELOG.md` | Release history |
-| `VALIDATION_RINGDOWN.md` | Ringdown detector validation notes |
-| `PEAK_DETECTION_VALIDATION.csv` | Tabular peak-validation output |
-| `AUDIT_REPORT.md` | Technical audit of the validated workflow |
+| `governance/CHANGELOG.md` | Release history |
+| `governance/GOVERNANCE.md` | Governance, audit, and non-redundancy rules |
+| `governance/VALIDATION_RINGDOWN.md` | Ringdown detector validation notes |
+| `governance/AUDIT_REPORT.md` | Previous technical audit of the validated workflow |
+| `governance/AUDIT_2026-06-29_CHANNEL_STATISTICS.md` | Audit of the CH1/CH2 and statistics update |
 
 ### Installation
 
@@ -194,7 +201,7 @@ On Linux/macOS:
 python -m py_compile app.py ensaisf\analysis.py ensaisf\isf_parser.py
 ```
 
-The detector validated in `v0.3.24` processes each waveform independently, identifies the largest forced-resonance crest, and tracks the following natural crests using the estimated period. See [`VALIDATION_RINGDOWN.md`](./VALIDATION_RINGDOWN.md) for details.
+The detector validated in `v0.3.24` processes each waveform independently, identifies the largest forced-resonance crest, and tracks the following natural crests using the estimated period. See [`governance/VALIDATION_RINGDOWN.md`](./governance/VALIDATION_RINGDOWN.md) for details.
 
 ### Technical Notes
 
