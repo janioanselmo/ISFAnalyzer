@@ -1,5 +1,31 @@
 # Changelog
 
+## v0.5.2-final-three-peak-envelope — 2026-06-29
+
+- Fixed Envelope fitting so the red curve is fitted from the selected upper-crest coordinates, not from local peak-to-valley prominence amplitudes.
+- Changed the default Envelope workflow to use 3 final peaks of the signal.
+- Changed the default automatic criterion to `Últimos N picos`, with `N = 3`.
+- Anchored the exponential fit at the first selected final crest so the overlay starts at the selected peak and stays in the same y-axis coordinate system as the waveform.
+- Kept `envelope_amplitude` as a diagnostic column, but no longer uses it as the default visible fit amplitude for the final-peak envelope.
+
+
+
+## v0.5.1-ddd-refactor-hotfix — 2026-06-29
+
+- Fixed runtime `NameError` caused by missing `SERIES_COLORS_HEX` imports after the DDD refactor.
+- Fixed latent comparison page issue by passing `max_plot_points` explicitly.
+- Added DDD hotfix audit note in `governance/AUDIT_2026-06-29_DDD_HOTFIX.md`.
+
+## v0.5.0 - DDD-inspired modular refactor
+
+- Reduced `app.py` to a minimal Streamlit entry point.
+- Moved Streamlit UI orchestration into `ensaisf/presentation/streamlit_app.py`.
+- Added `ensaisf/domain/` for channel-aware sequence metrics and envelope analysis helpers.
+- Added `ensaisf/application/` for power analysis and exported metric-table use cases.
+- Added `ensaisf/infrastructure/` for generic upload/ZIP loading and CSV export adapters.
+- Added `ensaisf/presentation/theme.py`, `formatting.py`, `plots.py`, and `state.py` to isolate UI constants, formatting, plotting, and Streamlit state.
+- Kept the validated numerical behavior from v0.4.3 while improving maintainability and future testability.
+
 ## v0.4.3 - Generic ZIP dataset loading
 
 - Generalized ZIP loading so the app works with any uploaded ZIP, not only the validation dataset used during development.

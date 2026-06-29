@@ -14,7 +14,7 @@ Aplicativo local em Python/Streamlit para análise de formas de onda Tektronix `
 
 O **ISF Analyzer** lê arquivos binários `.ISF` exportados por osciloscópios Tektronix, converte os dados para unidades físicas e oferece uma interface Streamlit para inspeção, comparação e extração de métricas de sinais pulsados. O fluxo principal foi pensado para análise de ringing/ringdown em janelas configuráveis, com seleção visual de picos e diagnóstico por arquivo.
 
-O projeto separa a interface (`app.py`) das rotinas de análise (`ensaisf/analysis.py`) e do parser Tektronix (`ensaisf/isf_parser.py`), facilitando validação e manutenção.
+A versão `v0.5.2` mantém a arquitetura modular e corrige a envoltória para usar, por padrão, os 3 picos finais do sinal. A versão `v0.5.0` reorganizou o projeto em uma arquitetura modular inspirada em DDD/Clean Architecture: `app.py` é apenas o ponto de entrada; a leitura de arquivos fica em `infrastructure/`; os cálculos científicos em `domain/` e `application/`; e a interface Streamlit em `presentation/`.
 
 ### Funcionalidades
 
@@ -24,7 +24,7 @@ O projeto separa a interface (`app.py`) das rotinas de análise (`ensaisf/analys
 - Correção de baseline e métricas de forma de onda.
 - Operações de análise para **Sinais**, **Envelope**, **Comparação** e **Potência**, com seleção automática CH1/CH2.
 - Detecção de picos de ringdown por arquivo antes da sobreposição visual.
-- Seleção automática ou manual de picos no Envelope, com envoltória ajustada também sobreposta no gráfico principal de seleção.
+- Seleção automática ou manual de picos no Envelope, por padrão usando os **3 picos finais** do sinal e desenhando a envoltória ajustada no mesmo eixo do gráfico principal.
 - Comparação normalizada entre curvas, incluindo Tensão×Corrente, Corrente×Corrente e Tensão×Tensão.
 - Métricas de deslocamento de ressonância, similaridade e decaimento.
 - Análise de potência para pares tensão/corrente com seletor restrito a CH1=tensão e CH2=corrente.
@@ -37,9 +37,13 @@ O projeto separa a interface (`app.py`) das rotinas de análise (`ensaisf/analys
 
 | Arquivo | Descrição |
 |---|---|
-| `app.py` | Aplicação Streamlit e fluxo de interface |
+| `app.py` | Ponto de entrada mínimo que chama a interface Streamlit |
+| `ensaisf/domain/` | Regras científicas e métricas independentes da interface |
+| `ensaisf/application/` | Casos de uso de análise, tabelas de métricas e potência |
+| `ensaisf/infrastructure/` | Leitura de uploads, ZIPs, `.ISF` e exportação CSV |
+| `ensaisf/presentation/` | Interface Streamlit, páginas, gráficos, estado visual e tema |
 | `ensaisf/isf_parser.py` | Parser de arquivos Tektronix `.ISF` |
-| `ensaisf/analysis.py` | Métricas, janelas, picos, ringdown, comparação e potência |
+| `ensaisf/analysis.py` | Núcleo legado validado de métricas, picos, comparação e potência |
 | `ensaisf/channels.py` | Classificação automática CH1=tensão e CH2=corrente |
 | `requirements.txt` | Dependências Python |
 | `run_windows.bat` | Atalho de execução no Windows |
@@ -89,14 +93,14 @@ No Linux/macOS:
 1. Carregue arquivos `.ISF` diretamente ou qualquer `.ZIP` contendo arquivos `.ISF`. O app não depende de um ZIP específico; ele preserva o nome do ZIP e o caminho interno para evitar colisões de nomes iguais.
 2. Se houver pastas/grupos com quantidades diferentes de aquisições, mantenha **Padronizar quantidade por pasta/grupo** ativo para usar os primeiros N `TXXXX` comuns em cada grupo. Esse N é calculado dinamicamente para cada carga.
 3. Ajuste a janela de ringing, o limiar de pico e a distância mínima entre picos.
-4. Use a seleção automática para iniciar com N picos por curva.
+4. Use a seleção automática para iniciar com os **3 picos finais** por curva. Esse é o padrão recomendado para o ringdown final.
 5. Clique em um pico selecionado para removê-lo ou em um candidato para adicioná-lo.
-6. O gráfico do item 2 mostra a onda completa, os picos selecionados e, quando houver ajuste válido, a envoltória em vermelho; o item 3 continua separado para resumo e comparação numérica.
+6. O gráfico do item 2 mostra a onda completa, os picos selecionados e, quando houver ajuste válido, a envoltória em vermelho. Essa linha agora é ajustada usando as coordenadas dos picos selecionados, não a proeminência pico-vale; o item 3 continua separado para resumo e comparação numérica.
 
 ### Validação
 
 ```powershell
-python -m py_compile app.py ensaisf\*.py
+python -m py_compile app.py ensaisf\*.py ensaisf\**\*.py ensaisf\**\*.py
 ```
 
 O detector validado em `v0.3.24` processa cada forma de onda individualmente, identifica a maior crista de ressonância forçada e acompanha as cristas naturais seguintes usando o período estimado. Consulte [`governance/VALIDATION_RINGDOWN.md`](./governance/VALIDATION_RINGDOWN.md) para detalhes.
@@ -120,7 +124,7 @@ Distribuído sob **MIT**. Veja [`LICENSE`](./LICENSE).
 
 **ISF Analyzer** reads Tektronix `.ISF` binary waveform files, converts them to physical units, and provides a Streamlit interface for signal inspection, comparison, and metric extraction. The main workflow targets pulse, ringing and ringdown analysis with configurable windows, visual peak selection, and per-file diagnostics.
 
-The project keeps the UI (`app.py`) separate from analysis routines (`ensaisf/analysis.py`) and the Tektronix parser (`ensaisf/isf_parser.py`) to simplify validation and maintenance.
+Version `v0.5.2` keeps the modular architecture and fixes the Envelope workflow to use the signal final three peaks by default. Version `v0.5.0` reorganized the project into a DDD/Clean Architecture-inspired modular layout: `app.py` is only the entry point; file loading lives in `infrastructure/`; scientific calculations live in `domain/` and `application/`; and the Streamlit UI lives in `presentation/`.
 
 ### Features
 
@@ -130,7 +134,7 @@ The project keeps the UI (`app.py`) separate from analysis routines (`ensaisf/an
 - Baseline correction and waveform metrics.
 - Analysis operations for **Signals**, **Envelope**, **Comparison**, and **Power**, with automatic CH1/CH2 selection.
 - Per-file ringdown peak detection before visual overlay.
-- Automatic or manual peak selection in the Envelope workflow, with the fitted envelope also overlaid on the main selection graph.
+- Automatic or manual peak selection in the Envelope workflow, using the **final three peaks** by default and overlaying the fitted envelope on the main selection graph.
 - Normalized curve comparison, including Voltage×Current, Current×Current, and Voltage×Voltage.
 - Resonance shift, similarity, and decay metrics.
 - Power analysis for voltage/current pairs with selectors restricted to CH1=voltage and CH2=current.
@@ -143,9 +147,13 @@ The project keeps the UI (`app.py`) separate from analysis routines (`ensaisf/an
 
 | File | Description |
 |---|---|
-| `app.py` | Streamlit application and UI flow |
+| `app.py` | Minimal entry point that calls the Streamlit interface |
+| `ensaisf/domain/` | Scientific rules and metrics independent from the UI |
+| `ensaisf/application/` | Analysis use cases, metric tables, and power workflow |
+| `ensaisf/infrastructure/` | Upload, ZIP, `.ISF`, and CSV export adapters |
+| `ensaisf/presentation/` | Streamlit UI, pages, plots, visual state, and theme |
 | `ensaisf/isf_parser.py` | Tektronix `.ISF` parser |
-| `ensaisf/analysis.py` | Metrics, windows, peaks, ringdown, comparison and power routines |
+| `ensaisf/analysis.py` | Validated legacy core for metrics, peaks, comparison and power |
 | `ensaisf/channels.py` | Automatic CH1=voltage and CH2=current classification |
 | `requirements.txt` | Python dependencies |
 | `run_windows.bat` | Windows launcher |
@@ -195,14 +203,14 @@ On Linux/macOS:
 1. Upload `.ISF` files directly or a `.ZIP` containing folders, for example `1 Pulse/T0000CH1.ISF` and `8 Pulse/T0000CH1.ISF`.
 2. If folders have different acquisition counts, keep **Padronizar quantidade por pasta** enabled to use the first common N `TXXXX` acquisitions per folder.
 3. Adjust the ringing window, peak threshold, and minimum peak distance.
-4. Use automatic selection to start with N peaks per curve.
+4. Use automatic selection to start with the **final three peaks** per curve. This is the recommended default for the final ringdown.
 5. Click a selected peak to remove it, or a candidate peak to add it.
-6. The item-2 graph shows the full waveform, selected peaks, and the fitted envelope in red when available; item 3 remains separated for summary and numerical comparison.
+6. The item-2 graph shows the full waveform, selected peaks, and the fitted envelope in red when available. The red curve is now fitted from the selected peak coordinates, not from peak-to-valley prominence; item 3 remains separated for summary and numerical comparison.
 
 ### Validation
 
 ```powershell
-python -m py_compile app.py ensaisf\*.py
+python -m py_compile app.py ensaisf\*.py ensaisf\**\*.py ensaisf\**\*.py
 ```
 
 The detector validated in `v0.3.24` processes each waveform independently, identifies the largest forced-resonance crest, and tracks the following natural crests using the estimated period. See [`governance/VALIDATION_RINGDOWN.md`](./governance/VALIDATION_RINGDOWN.md) for details.

@@ -47,3 +47,23 @@ python -m py_compile app.py ensaisf/*.py
 ```
 
 before producing a release ZIP.
+
+## Modular architecture rule
+
+From `v0.5.0` onward, `app.py` must remain a minimal entry point. New code should follow this placement rule:
+
+| Layer | Folder | Use for |
+|---|---|---|
+| Domain | `ensaisf/domain/` | Scientific rules, metrics, fitting, signal interpretation helpers |
+| Application | `ensaisf/application/` | Use cases that combine domain routines into app-level workflows |
+| Infrastructure | `ensaisf/infrastructure/` | Uploads, ZIP expansion, file adapters, CSV/export adapters |
+| Presentation | `ensaisf/presentation/` | Streamlit UI, state, formatting, plots and visual components |
+| Utilities | `ensaisf/utils/` | Generic numerical or formatting helpers with no scientific ownership |
+
+Avoid adding analysis logic directly to `app.py` or mixing Streamlit widgets with domain calculations.
+
+Updated validation command:
+
+```bash
+python -m py_compile app.py ensaisf/*.py ensaisf/**/*.py
+```
