@@ -18,17 +18,18 @@ O projeto separa a interface (`app.py`) das rotinas de análise (`ensaisf/analys
 
 ### Funcionalidades
 
-- Upload local de um ou vários arquivos `.ISF`.
+- Upload local de um ou vários arquivos `.ISF` ou de um `.ZIP` com pastas preservadas.
 - Parser Tektronix robusto para bloco binário `:CURV #`.
 - Conversão para tempo e amplitude usando metadados do cabeçalho (`XINCR`, `XZERO`, `YMULT`, `YOFF`, `YZERO`).
 - Correção de baseline e métricas de forma de onda.
 - Operações de análise para **Sinais**, **Envelope**, **Comparação** e **Potência**, com seleção automática CH1/CH2.
 - Detecção de picos de ringdown por arquivo antes da sobreposição visual.
-- Seleção automática ou manual de picos no Envelope.
+- Seleção automática ou manual de picos no Envelope, com envoltória ajustada também sobreposta no gráfico principal de seleção.
 - Comparação normalizada entre curvas, incluindo Tensão×Corrente, Corrente×Corrente e Tensão×Tensão.
 - Métricas de deslocamento de ressonância, similaridade e decaimento.
 - Análise de potência para pares tensão/corrente com seletor restrito a CH1=tensão e CH2=corrente.
 - Estatísticas de sequência para decaimento médio de tensão e acréscimo médio de corrente.
+- Padronização opcional de séries por pasta, mantendo os primeiros N `TXXXX` comuns quando uma pasta tem mais aquisições que outra.
 - Exportação e inspeção de metadados/cabeçalho bruto dos arquivos.
 - Paleta fixa por ordem de curva para manter consistência visual entre abas.
 
@@ -85,16 +86,17 @@ No Linux/macOS:
 
 ### Fluxo de Envelope
 
-1. Carregue de 1 a 4 arquivos `.ISF`.
-2. Ajuste a janela de ringing, o limiar de pico e a distância mínima entre picos.
-3. Use a seleção automática para iniciar com N picos por curva.
-4. Clique em um pico selecionado para removê-lo ou em um candidato para adicioná-lo.
-5. O ajuste de envelope e as comparações normalizadas são atualizados automaticamente.
+1. Carregue arquivos `.ISF` diretamente ou qualquer `.ZIP` contendo arquivos `.ISF`. O app não depende de um ZIP específico; ele preserva o nome do ZIP e o caminho interno para evitar colisões de nomes iguais.
+2. Se houver pastas/grupos com quantidades diferentes de aquisições, mantenha **Padronizar quantidade por pasta/grupo** ativo para usar os primeiros N `TXXXX` comuns em cada grupo. Esse N é calculado dinamicamente para cada carga.
+3. Ajuste a janela de ringing, o limiar de pico e a distância mínima entre picos.
+4. Use a seleção automática para iniciar com N picos por curva.
+5. Clique em um pico selecionado para removê-lo ou em um candidato para adicioná-lo.
+6. O gráfico do item 2 mostra a onda completa, os picos selecionados e, quando houver ajuste válido, a envoltória em vermelho; o item 3 continua separado para resumo e comparação numérica.
 
 ### Validação
 
 ```powershell
-python -m py_compile app.py ensaisf\analysis.py ensaisf\isf_parser.py
+python -m py_compile app.py ensaisf\*.py
 ```
 
 O detector validado em `v0.3.24` processa cada forma de onda individualmente, identifica a maior crista de ressonância forçada e acompanha as cristas naturais seguintes usando o período estimado. Consulte [`governance/VALIDATION_RINGDOWN.md`](./governance/VALIDATION_RINGDOWN.md) para detalhes.
@@ -122,17 +124,18 @@ The project keeps the UI (`app.py`) separate from analysis routines (`ensaisf/an
 
 ### Features
 
-- Local upload of one or multiple `.ISF` files.
+- Local upload of one or multiple `.ISF` files or a `.ZIP` with preserved folders.
 - Robust Tektronix parser for binary `:CURV #` blocks.
 - Time and amplitude conversion from header metadata (`XINCR`, `XZERO`, `YMULT`, `YOFF`, `YZERO`).
 - Baseline correction and waveform metrics.
 - Analysis operations for **Signals**, **Envelope**, **Comparison**, and **Power**, with automatic CH1/CH2 selection.
 - Per-file ringdown peak detection before visual overlay.
-- Automatic or manual peak selection in the Envelope workflow.
+- Automatic or manual peak selection in the Envelope workflow, with the fitted envelope also overlaid on the main selection graph.
 - Normalized curve comparison, including Voltage×Current, Current×Current, and Voltage×Voltage.
 - Resonance shift, similarity, and decay metrics.
 - Power analysis for voltage/current pairs with selectors restricted to CH1=voltage and CH2=current.
 - Pulse-sequence statistics for mean voltage-amplitude decay and mean current-amplitude increase.
+- Optional per-folder sequence standardization, keeping the first common `TXXXX` acquisitions when one folder has more captures than another.
 - Export plus metadata/raw-header inspection.
 - Fixed curve color order across tabs for visual consistency.
 
@@ -189,16 +192,17 @@ On Linux/macOS:
 
 ### Envelope Workflow
 
-1. Upload 1 to 4 `.ISF` files.
-2. Adjust the ringing window, peak threshold, and minimum peak distance.
-3. Use automatic selection to start with N peaks per curve.
-4. Click a selected peak to remove it, or a candidate peak to add it.
-5. Envelope fitting and normalized comparisons update automatically.
+1. Upload `.ISF` files directly or a `.ZIP` containing folders, for example `1 Pulse/T0000CH1.ISF` and `8 Pulse/T0000CH1.ISF`.
+2. If folders have different acquisition counts, keep **Padronizar quantidade por pasta** enabled to use the first common N `TXXXX` acquisitions per folder.
+3. Adjust the ringing window, peak threshold, and minimum peak distance.
+4. Use automatic selection to start with N peaks per curve.
+5. Click a selected peak to remove it, or a candidate peak to add it.
+6. The item-2 graph shows the full waveform, selected peaks, and the fitted envelope in red when available; item 3 remains separated for summary and numerical comparison.
 
 ### Validation
 
 ```powershell
-python -m py_compile app.py ensaisf\analysis.py ensaisf\isf_parser.py
+python -m py_compile app.py ensaisf\*.py
 ```
 
 The detector validated in `v0.3.24` processes each waveform independently, identifies the largest forced-resonance crest, and tracks the following natural crests using the estimated period. See [`governance/VALIDATION_RINGDOWN.md`](./governance/VALIDATION_RINGDOWN.md) for details.

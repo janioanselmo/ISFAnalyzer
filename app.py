@@ -1,8 +1,10 @@
 from __future__ import annotations
 
-from pathlib import Path
 import hashlib
 from io import BytesIO
+from pathlib import Path
+import re
+import zipfile
 
 import numpy as np
 import pandas as pd
@@ -48,7 +50,7 @@ st.set_page_config(
 )
 
 
-APP_VERSION = "0.4.1-channel-aware-statistics-no-validation-csv"
+APP_VERSION = "0.4.3-generic-zip-dataset-loading"
 
 
 # Global color order used by all analysis screens.
@@ -271,14 +273,174 @@ def plot_sequence_trend(metrics_df: pd.DataFrame, waveforms: list[dict], role_la
 @st.cache_data(show_spinner=False)
 def parse_uploaded_file(name: str, data: bytes):
     waveform = read_isf_bytes(data)
+    normalized_name = str(name).replace("\\", "/")
     return {
-        "name": name,
+        "name": normalized_name,
+        "source_path": normalized_name,
+        "raw_filename": Path(normalized_name).name,
+        "source_group": _source_group_from_name(normalized_name),
         "data_hash": hashlib.md5(data).hexdigest(),
         "time_s": waveform.time_s,
         "value": waveform.value,
         "metadata": waveform.metadata,
         "header": waveform.header,
     }
+
+
+def _source_group_from_name(name: str) -> str:
+    """Return the folder/acquisition group for a file-like display name."""
+    normalized = str(name).replace("\\", "/")
+    parent = str(Path(normalized).parent).replace("\\", "/")
+    if parent in {".", ""}:
+        return "Arquivos avulsos"
+    return parent
+
+
+def _safe_zip_member(member_name: str) -> bool:
+    """Accept regular ISF files from ZIPs and reject unsafe paths."""
+    normalized = str(member_name).replace("\\", "/")
+    path = Path(normalized)
+    if normalized.endswith("/") or path.is_absolute():
+        return False
+    if any(part in {"", ".", ".."} for part in path.parts):
+        return False
+    return path.suffix.lower() == ".isf"
+
+
+def _safe_dataset_root(upload_name: str) -> str:
+    """Return a stable dataset root from the uploaded ZIP filename."""
+    stem = Path(str(upload_name).replace("\\", "/")).stem.strip()
+    if not stem:
+        stem = "dataset_zip"
+    cleaned = re.sub(r"[^0-9A-Za-zÀ-ÿ_.() -]+", "_", stem).strip(" ._")
+    return cleaned or "dataset_zip"
+
+
+def _zip_member_display_name(upload_name: str, member_name: str) -> str:
+    """Build a unique, dataset-aware display path for a ZIP member.
+
+    The app must work with any uploaded ZIP, not only a specific validation
+    package. Prefixing each member with the ZIP stem preserves dataset identity
+    when several ZIPs contain identical internal folder/file names. If the ZIP
+    already contains a top-level folder with the same name as the archive, the
+    function avoids duplicating that root.
+    """
+    dataset_root = _safe_dataset_root(upload_name)
+    normalized_member = str(member_name).replace("\\", "/").lstrip("/")
+    member_parts = Path(normalized_member).parts
+    if member_parts and member_parts[0].lower() == dataset_root.lower():
+        return normalized_member
+    return f"{dataset_root}/{normalized_member}"
+
+
+def _unique_upload_name(name: str, used_names: set[str]) -> str:
+    """Return a stable unique name while keeping the Tektronix basename readable."""
+    normalized = str(name).replace("\\", "/")
+    if normalized not in used_names:
+        used_names.add(normalized)
+        return normalized
+
+    path = Path(normalized)
+    stem = path.stem
+    suffix = path.suffix
+    parent = str(path.parent).replace("\\", "/")
+    parent = "" if parent in {".", ""} else parent
+    counter = 2
+    while True:
+        candidate_name = f"{stem}__duplicado_{counter:02d}{suffix}"
+        candidate = f"{parent}/{candidate_name}" if parent else candidate_name
+        if candidate not in used_names:
+            used_names.add(candidate)
+            return candidate
+        counter += 1
+
+
+def expand_uploaded_files(uploaded_files) -> tuple[list[tuple[str, bytes]], list[str]]:
+    """Expand direct .ISF uploads and .ZIP uploads into unique file entries."""
+    entries: list[tuple[str, bytes]] = []
+    errors: list[str] = []
+    used_names: set[str] = set()
+
+    for uploaded in uploaded_files:
+        upload_name = str(uploaded.name)
+        data = uploaded.getvalue()
+        if upload_name.lower().endswith(".zip"):
+            try:
+                with zipfile.ZipFile(BytesIO(data)) as archive:
+                    for info in sorted(archive.infolist(), key=lambda item: item.filename.lower()):
+                        if not _safe_zip_member(info.filename):
+                            continue
+                        try:
+                            member_data = archive.read(info)
+                        except Exception as exc:
+                            errors.append(f"{upload_name}/{info.filename}: {exc}")
+                            continue
+                        display_name = _zip_member_display_name(upload_name, info.filename)
+                        member_name = _unique_upload_name(display_name, used_names)
+                        entries.append((member_name, member_data))
+            except zipfile.BadZipFile as exc:
+                errors.append(f"{upload_name}: ZIP inválido ({exc})")
+        elif upload_name.lower().endswith(".isf"):
+            entries.append((_unique_upload_name(upload_name, used_names), data))
+        else:
+            errors.append(f"{upload_name}: formato ignorado; carregue .ISF ou .ZIP")
+
+    return entries, errors
+
+
+def standardize_waveforms_by_group(
+    waveforms: list[dict],
+    enabled: bool = True,
+    target_count: int | None = None,
+) -> tuple[list[dict], pd.DataFrame, int | None]:
+    """Keep the first N acquisition indices in each folder/group.
+
+    The count is dynamic and based on distinct Tektronix TXXXX acquisition
+    indices, not on individual channels. Therefore N acquisitions means up to
+    2N files when both CH1 and CH2 are present. No dataset name or acquisition
+    count is hard-coded here.
+    """
+    if not waveforms:
+        return waveforms, pd.DataFrame(), None
+
+    rows = []
+    pulse_indices_by_group: dict[str, list[int]] = {}
+    for group in sorted({item.get("source_group", "Arquivos avulsos") for item in waveforms}):
+        group_items = [item for item in waveforms if item.get("source_group") == group]
+        pulse_indices = sorted(
+            {int(item["pulse_index"]) for item in group_items if item.get("pulse_index") is not None}
+        )
+        pulse_indices_by_group[group] = pulse_indices
+        rows.append(
+            {
+                "grupo/pasta": group,
+                "arquivos_isf": int(len(group_items)),
+                "aquisições_TXXXX": int(len(pulse_indices)),
+                "tensão_CH1": int(sum(1 for item in group_items if item.get("role") == "voltage")),
+                "corrente_CH2": int(sum(1 for item in group_items if item.get("role") == "current")),
+            }
+        )
+
+    summary = pd.DataFrame(rows)
+    counts = [len(values) for values in pulse_indices_by_group.values() if values]
+    common_count = int(min(counts)) if counts else None
+    if target_count is not None and common_count is not None:
+        common_count = min(int(target_count), common_count)
+
+    if not enabled or common_count is None:
+        return waveforms, summary, common_count
+
+    allowed_by_group = {
+        group: set(indices[:common_count])
+        for group, indices in pulse_indices_by_group.items()
+    }
+    filtered = [
+        item
+        for item in waveforms
+        if item.get("pulse_index") is None
+        or int(item["pulse_index"]) in allowed_by_group.get(item.get("source_group"), set())
+    ]
+    return filtered, summary, common_count
 
 
 def plot_waveforms(
@@ -1697,6 +1859,56 @@ def _draw_polyline_decimated(
         draw.line(points, fill=color, width=2)
 
 
+def _envelope_curve_points(
+    envelope_metrics: dict,
+    start_us: float,
+    end_us: float,
+    n_points: int = 300,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Return absolute-time upper-envelope points for the context graph."""
+    tau_us = float(envelope_metrics.get("tau_us", np.nan))
+    a0 = float(envelope_metrics.get("a0", np.nan))
+    t0_us = float(envelope_metrics.get("t0_us", np.nan))
+    last_us = float(envelope_metrics.get("ultimo_pico_us", np.nan))
+    if not all(np.isfinite(value) for value in [tau_us, a0, t0_us, last_us]):
+        return np.array([], dtype=float), np.array([], dtype=float)
+    if tau_us <= 0 or a0 <= 0 or last_us <= t0_us:
+        return np.array([], dtype=float), np.array([], dtype=float)
+
+    x0 = max(float(start_us), t0_us)
+    x1 = min(float(end_us), last_us)
+    if not np.isfinite(x0) or not np.isfinite(x1) or x1 <= x0:
+        return np.array([], dtype=float), np.array([], dtype=float)
+
+    x_us = np.linspace(x0, x1, max(16, int(n_points)))
+    y_env = a0 * np.exp(-((x_us - t0_us) / tau_us))
+    return x_us, y_env
+
+
+def _draw_envelope_curve(
+    draw: ImageDraw.ImageDraw,
+    envelope_metrics: dict,
+    x_range: tuple[float, float],
+    y_range: tuple[float, float],
+    plot_box: tuple[int, int, int, int],
+    color: tuple[int, int, int] = SELECTED_PEAK_COLOR_RGB,
+) -> None:
+    """Draw the fitted upper envelope over the waveform context graph."""
+    x_us, y_env = _envelope_curve_points(envelope_metrics, x_range[0], x_range[1])
+    points = []
+    for tx, yy in zip(x_us, y_env):
+        if not np.isfinite(tx) or not np.isfinite(yy):
+            continue
+        points.append(
+            (
+                _to_pixel_x(float(tx), x_range, plot_box),
+                _to_pixel_y(float(yy), y_range, plot_box),
+            )
+        )
+    if len(points) >= 2:
+        draw.line(points, fill=color, width=3)
+
+
 def build_multi_clickable_waveform_image(
     items: list[dict],
     peaks_by_file: dict[str, pd.DataFrame],
@@ -1708,13 +1920,17 @@ def build_multi_clickable_waveform_image(
     focus_y_on_peaks: bool = False,
     image_width: int = 1450,
     image_height: int = 560,
+    envelope_metrics_by_file: dict[str, dict] | None = None,
 ) -> tuple[Image.Image, dict[tuple[str, int], tuple[float, float]]]:
     """Render full waveforms with positive peak markers only.
 
     Envelope analysis keeps the complete ringdown waveform visible for context,
     but only local positive maxima are drawn as clickable markers. The selected
-    peak IDs are then used to fit the exponential decay envelope.
+    peak IDs are then used to fit the exponential decay envelope. When at least
+    two peaks are selected, the fitted upper envelope is also drawn over this
+    same graph while the summary/comparison remains separated below.
     """
+    envelope_metrics_by_file = envelope_metrics_by_file or {}
     x_range = (float(start_us), float(end_us)) if end_us > start_us else (0.0, 1.0)
 
     waveform_cache: list[tuple[dict, np.ndarray, np.ndarray]] = []
@@ -1734,6 +1950,16 @@ def build_multi_clickable_waveform_image(
             values = peak_df["amplitude"].astype(float).to_numpy()
             values = values[np.isfinite(values)]
             peak_y_pool.extend(values.tolist())
+        env_x, env_y = _envelope_curve_points(
+            envelope_metrics_by_file.get(item["name"], {}),
+            start_us,
+            end_us,
+        )
+        if len(env_x) and len(env_y):
+            env_values = env_y.astype(float)
+            env_values = env_values[np.isfinite(env_values)]
+            y_pool.extend(env_values.tolist())
+            peak_y_pool.extend(env_values.tolist())
 
     y_values = np.asarray(peak_y_pool if focus_y_on_peaks and peak_y_pool else y_pool, dtype=float)
     if not y_values.size:
@@ -1794,6 +2020,18 @@ def build_multi_clickable_waveform_image(
             max_points=max_points,
         )
 
+    for item, _t_win, _y_win in waveform_cache:
+        metrics = envelope_metrics_by_file.get(item["name"], {})
+        if metrics:
+            _draw_envelope_curve(
+                draw,
+                metrics,
+                x_range=x_range,
+                y_range=y_range,
+                plot_box=plot_box,
+                color=SELECTED_PEAK_COLOR_RGB,
+            )
+
     # Legend inside the plot area, like the Plotly chart in "Envoltórias calculadas".
     legend_items = [
         (item["name"][:36], item.get("series_color_rgb", palette[idx % len(palette)]))
@@ -1851,6 +2089,8 @@ def build_multi_clickable_waveform_image(
 
     _draw_text(draw, (left, image_height - 32), "Tempo (us)")
     _draw_text(draw, (10, top - 28), "Amplitude")
+    if envelope_metrics_by_file:
+        _draw_text(draw, (left + 120, image_height - 32), "linha vermelha = envoltória ajustada")
     return img, peak_pixels
 
 
@@ -2642,9 +2882,23 @@ with st.sidebar:
     st.header("Configuração da análise")
 
     uploaded_files = st.file_uploader(
-        "Carregue arquivos Tektronix .ISF",
-        type=["isf", "ISF"],
+        "Carregue arquivos Tektronix .ISF ou um .ZIP com pastas",
+        type=["isf", "ISF", "zip", "ZIP"],
         accept_multiple_files=True,
+        help=(
+            "Você pode carregar qualquer ZIP com arquivos .ISF em qualquer estrutura de pastas. "
+            "O app preserva o nome do ZIP e o caminho interno, evitando colisões de nomes iguais."
+        ),
+    )
+
+    standardize_groups = st.checkbox(
+        "Padronizar quantidade por pasta/grupo",
+        value=True,
+        help=(
+            "Funciona para qualquer ZIP ou conjunto de arquivos. Quando grupos têm quantidades "
+            "diferentes de aquisições TXXXX, o app calcula automaticamente o menor N comum e "
+            "mantém os primeiros N TXXXX de cada grupo. Não há valor fixo no código."
+        ),
     )
 
     gap_mm = st.number_input(
@@ -2720,29 +2974,55 @@ with st.sidebar:
 
 if not uploaded_files:
     st.info(
-        "Carregue um ou mais arquivos `.ISF` na barra lateral. "
+        "Carregue um ou mais arquivos `.ISF` ou qualquer `.ZIP` contendo arquivos `.ISF` na barra lateral. "
         "O `.PNG` do osciloscópio é útil para conferência visual, mas o `.ISF` contém a forma de onda real."
     )
     st.stop()
 
 waveforms: list[dict] = []
 errors: list[str] = []
+upload_entries, upload_expand_errors = expand_uploaded_files(uploaded_files)
+errors.extend(upload_expand_errors)
 
-for idx, file in enumerate(uploaded_files):
+for idx, (entry_name, entry_data) in enumerate(upload_entries):
     try:
-        item = parse_uploaded_file(file.name, file.getvalue())
-        item.update(classify_signal_name(file.name).as_dict())
+        item = parse_uploaded_file(entry_name, entry_data)
+        item.update(classify_signal_name(entry_name).as_dict())
         item["series_color_rgb"] = SERIES_COLORS_RGB[idx % len(SERIES_COLORS_RGB)]
         item["series_color_hex"] = SERIES_COLORS_HEX[idx % len(SERIES_COLORS_HEX)]
         waveforms.append(item)
     except Exception as exc:
-        errors.append(f"{file.name}: {exc}")
+        errors.append(f"{entry_name}: {exc}")
+
+waveforms_raw_count = len(waveforms)
+waveforms, group_summary_df, common_group_count = standardize_waveforms_by_group(
+    waveforms,
+    enabled=standardize_groups,
+)
+
+# Re-assign colors after optional standardization so legends stay compact.
+for idx, item in enumerate(waveforms):
+    item["series_color_rgb"] = SERIES_COLORS_RGB[idx % len(SERIES_COLORS_RGB)]
+    item["series_color_hex"] = SERIES_COLORS_HEX[idx % len(SERIES_COLORS_HEX)]
 
 if errors:
     st.error("Alguns arquivos não puderam ser lidos:\n\n" + "\n".join(errors))
 
 if not waveforms:
     st.stop()
+
+if not group_summary_df.empty:
+    with st.sidebar.expander("Resumo das pastas carregadas", expanded=False):
+        st.dataframe(group_summary_df, width="stretch", height=180)
+        if standardize_groups and common_group_count is not None:
+            st.caption(
+                f"Padronização ativa: usando os primeiros {common_group_count} TXXXX de cada pasta/grupo detectado. "
+                f"Arquivos ISF usados: {len(waveforms)} de {waveforms_raw_count}."
+            )
+        elif common_group_count is not None:
+            st.caption(
+                f"Padronização desativada. Menor série detectada: {common_group_count} TXXXX."
+            )
 
 
 
@@ -3260,6 +3540,28 @@ with tab_signal:
                     ". Ajuste a janela, reduza o limiar ou diminua a distância mínima."
                 )
 
+            envelope_rows = []
+            envelope_metrics_by_file: dict[str, dict] = {}
+            envelope_fit_tables: dict[str, pd.DataFrame] = {}
+            for ring_item in selected_items:
+                name = ring_item["name"]
+                selected_ids = selected_peak_ids_for_file(name)
+                peak_df = peaks_by_file.get(name, pd.DataFrame())
+                envelope_metrics, fit_df = fit_selected_envelope_only(
+                    peak_df,
+                    selected_ids,
+                    polarity=polarity,
+                    file_name=name,
+                )
+                envelope_fit_tables[name] = fit_df
+                if np.isfinite(envelope_metrics.get("tau_us", np.nan)):
+                    envelope_metrics["series_color"] = ring_item.get(
+                        "series_color_hex",
+                        SERIES_COLORS_HEX[len(envelope_rows) % len(SERIES_COLORS_HEX)],
+                    )
+                    envelope_rows.append(envelope_metrics)
+                    envelope_metrics_by_file[name] = envelope_metrics
+
             if streamlit_image_coordinates is None:
                 st.error(
                     "O componente de clique por imagem não está instalado. Rode: "
@@ -3283,6 +3585,7 @@ with tab_signal:
                     focus_y_on_peaks=focus_y,
                     image_width=1450,
                     image_height=560,
+                    envelope_metrics_by_file=envelope_metrics_by_file,
                 )
                 image_state_signature = hashlib.md5(
                     repr(
@@ -3296,6 +3599,7 @@ with tab_signal:
                             int(auto_n),
                             auto_mode,
                             {name: tuple(selected_by_file.get(name, [])) for name in env_selected_names},
+                            {name: envelope_metrics_by_file.get(name, {}).get("tau_us") for name in env_selected_names},
                         ]
                     ).encode("utf-8")
                 ).hexdigest()[:10]
@@ -3320,22 +3624,10 @@ with tab_signal:
                     st.rerun()
 
             st.markdown("**3) Envoltórias calculadas**")
-            envelope_rows = []
-            envelope_fit_tables: dict[str, pd.DataFrame] = {}
-            for ring_item in selected_items:
-                name = ring_item["name"]
-                selected_ids = selected_peak_ids_for_file(name)
-                peak_df = peaks_by_file.get(name, pd.DataFrame())
-                envelope_metrics, fit_df = fit_selected_envelope_only(
-                    peak_df,
-                    selected_ids,
-                    polarity=polarity,
-                    file_name=name,
-                )
-                envelope_fit_tables[name] = fit_df
-                if np.isfinite(envelope_metrics.get("tau_us", np.nan)):
-                    envelope_metrics["series_color"] = ring_item.get("series_color_hex", SERIES_COLORS_HEX[len(envelope_rows) % len(SERIES_COLORS_HEX)])
-                    envelope_rows.append(envelope_metrics)
+            st.caption(
+                "Este item permanece separado como resumo/comparação numérica. "
+                "Quando há ajuste válido, a mesma envoltória também aparece como linha vermelha no gráfico do item 2."
+            )
 
             if len(envelope_rows) == 0:
                 st.info("Selecione pelo menos 2 picos máximos em um arquivo para calcular a primeira envoltória.")

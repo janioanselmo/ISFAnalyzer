@@ -1,5 +1,20 @@
 # Changelog
 
+## v0.4.3 - Generic ZIP dataset loading
+
+- Generalized ZIP loading so the app works with any uploaded ZIP, not only the validation dataset used during development.
+- Prefixes ZIP members with the uploaded ZIP stem, preserving dataset identity when multiple ZIPs contain the same internal folder and Tektronix filenames.
+- Updated sidebar guidance to make clear that per-folder standardization is dynamic: the app computes the smallest common `TXXXX` count for the currently loaded groups.
+- Removed wording that could imply a fixed 14-acquisition rule; the previous 14-count case remains only a validation example.
+
+## v0.4.2 - ZIP folders, sequence standardization and envelope overlay
+
+- Added `.ZIP` upload support while preserving internal folder paths, allowing files with the same Tektronix basename to coexist safely.
+- Added optional per-folder standardization that keeps the first common `TXXXX` acquisitions in each folder. This supports datasets such as 14 acquisitions in the first-pulse folder and 20 in the final-pulse folder, using 14 from each.
+- Kept direct duplicate `.ISF` filenames usable by adding an internal duplicate suffix when needed.
+- Updated the Envelope workflow so the fitted envelope is drawn over the item-2 waveform/peak-selection graph while item 3 remains a separated summary/comparison section.
+- Updated governance notes for non-renaming, ZIP-based grouping, and non-redundant Envelope presentation.
+
 ## v0.4.1 - Channel statistics package cleanup
 
 - Confirmed that the v0.4.0 package contains code-level changes for automatic CH1/CH2 classification and channel-aware statistics.
