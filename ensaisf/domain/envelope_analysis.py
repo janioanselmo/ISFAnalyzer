@@ -417,6 +417,74 @@ def _estimate_peak_period_us(peaks: pd.DataFrame, anchor_time_us: float) -> floa
     return median
 
 
+
+def _refine_crest_to_raw_lobe_maximum(
+    t_us: np.ndarray,
+    y_raw: np.ndarray,
+    crest_index: int,
+    estimated_period_us: float,
+    fallback_half_width_us: float = 3.0,
+) -> int:
+    """Refine a smoothed crest location to the true raw local maximum.
+
+    The detector intentionally uses a lightly smoothed signal to avoid picking
+    nanosecond-scale acquisition noise. For the envelope fit, however, the
+    plotted point must be the actual upper crest of the measured waveform. This
+    helper searches a narrow lobe-centered window around the detected crest and
+    returns the raw-sample maximum within that window.
+    """
+    crest_index = int(np.clip(int(crest_index), 0, len(y_raw) - 1))
+    if len(y_raw) == 0 or len(t_us) == 0:
+        return crest_index
+
+    if np.isfinite(estimated_period_us) and estimated_period_us > 0:
+        half_width_us = max(1.0, min(0.22 * float(estimated_period_us), 12.0))
+    else:
+        half_width_us = float(fallback_half_width_us)
+
+    center_time_us = float(t_us[crest_index])
+    window = (t_us >= center_time_us - half_width_us) & (t_us <= center_time_us + half_width_us)
+    window_indices = np.flatnonzero(window & np.isfinite(y_raw))
+    if window_indices.size == 0:
+        return crest_index
+
+    local_values = y_raw[window_indices].astype(float)
+    if not np.any(np.isfinite(local_values)):
+        return crest_index
+
+    return int(window_indices[int(np.nanargmax(local_values))])
+
+
+def _dedupe_raw_crests_by_time(
+    crest_indices: list[int],
+    t_us: np.ndarray,
+    y_raw: np.ndarray,
+    estimated_period_us: float,
+) -> list[int]:
+    """Keep one upper crest per lobe after raw refinement."""
+    if not crest_indices:
+        return []
+
+    if np.isfinite(estimated_period_us) and estimated_period_us > 0:
+        min_gap_us = max(1.0, 0.35 * float(estimated_period_us))
+    else:
+        min_gap_us = 1.0
+
+    refined = sorted(set(int(i) for i in crest_indices), key=lambda i: float(t_us[int(i)]))
+    groups: list[list[int]] = []
+    for idx in refined:
+        if not groups or abs(float(t_us[idx]) - float(t_us[groups[-1][-1]])) >= min_gap_us:
+            groups.append([idx])
+        else:
+            groups[-1].append(idx)
+
+    out: list[int] = []
+    for group in groups:
+        best = max(group, key=lambda i: float(y_raw[int(i)]))
+        out.append(int(best))
+    return out
+
+
 def _forced_peak_id_from_candidates(peak_df: pd.DataFrame) -> int | None:
     """Return the forced-resonance anchor ID for one isolated waveform.
 
@@ -1802,20 +1870,36 @@ def robust_upper_peak_candidates_from_waveform(
     # Merge broad detected crests and tracked crests. Reject extrema too close
     # to the right edge of the user window: those are often just the signal
     # returning to baseline at the boundary rather than a complete crest.
-    merged = sorted(set(int(idx) for idx in crest_idx.tolist() + tracked_idx))
+    merged_smoothed = sorted(set(int(idx) for idx in crest_idx.tolist() + tracked_idx))
     if np.isfinite(estimated_period_us) and estimated_period_us > 0:
         boundary_guard_us = max(1.0, min(5.0, 0.05 * estimated_period_us))
     else:
         boundary_guard_us = 1.0
+    merged_smoothed = [idx for idx in merged_smoothed if t_us[int(idx)] <= float(end_us) - boundary_guard_us]
+
+    # The detector location is intentionally smoothed, but the envelope point
+    # must be the true raw maximum of each damped-sinusoid lobe. Refine every
+    # candidate to the raw local maximum in a narrow lobe-centered window and
+    # deduplicate so only one upper crest remains per oscillation cycle.
+    raw_anchor_idx = _refine_crest_to_raw_lobe_maximum(t_us, y_win, anchor_idx, estimated_period_us)
+    raw_tracked_idx = {
+        _refine_crest_to_raw_lobe_maximum(t_us, y_win, idx, estimated_period_us)
+        for idx in tracked_idx
+    }
+    merged = [
+        _refine_crest_to_raw_lobe_maximum(t_us, y_win, idx, estimated_period_us)
+        for idx in merged_smoothed
+    ]
+    merged = _dedupe_raw_crests_by_time(merged, t_us, y_win, estimated_period_us)
     merged = [idx for idx in merged if t_us[int(idx)] <= float(end_us) - boundary_guard_us]
 
     if len(merged) > int(max_candidates):
-        mandatory = set(int(idx) for idx in tracked_idx + [anchor_idx])
+        mandatory = set(int(idx) for idx in raw_tracked_idx | {raw_anchor_idx})
         remaining = [idx for idx in merged if idx not in mandatory]
-        remaining_scores = _smooth_prominence(np.asarray(remaining, dtype=int)) if remaining else np.array([], dtype=float)
+        remaining_scores = np.asarray([abs(float(y_win[int(idx)])) for idx in remaining], dtype=float)
         ranked_remaining = [idx for _, idx in sorted(zip(remaining_scores, remaining), reverse=True)]
         keep_list = list(mandatory) + ranked_remaining[: max(0, int(max_candidates) - len(mandatory))]
-        merged = sorted(set(keep_list))
+        merged = sorted(set(keep_list), key=lambda idx: float(t_us[int(idx)]))
 
     rows = []
     for idx in merged:
@@ -1826,9 +1910,9 @@ def robust_upper_peak_candidates_from_waveform(
             if np.isfinite(estimated_period_us) and estimated_period_us > 0
             else np.ones_like(t_us, dtype=bool)
         )
-        local_prom = float(y_detect[idx] - np.nanmin(y_detect[local_window])) if np.any(local_window) else float(abs(y_detect[idx]))
+        local_prom = float(y_win[idx] - np.nanmin(y_win[local_window])) if np.any(local_window) else float(abs(y_win[idx]))
         local_prom = max(local_prom, 0.0)
-        role = "forçado/âncora" if idx == anchor_idx else ("natural rastreado" if idx in tracked_idx else "crista candidata")
+        role = "forçado/âncora" if idx == raw_anchor_idx else ("natural rastreado" if idx in raw_tracked_idx else "crista candidata")
         amp = float(y_win[idx])
         rows.append(
             {

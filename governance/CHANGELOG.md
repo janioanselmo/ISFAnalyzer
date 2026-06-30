@@ -1,5 +1,12 @@
 # Changelog
 
+
+## 0.5.3 - Raw lobe peak envelope refinement
+
+- Refined envelope peak detection so each candidate crest is mapped back to the raw waveform maximum inside its damped-sinusoid lobe.
+- Kept `N = 3` as the default number of final crests while preserving configurability in the Streamlit UI.
+- Added governance audit for the raw lobe maximum envelope rule.
+
 ## v0.5.2-final-three-peak-envelope — 2026-06-29
 
 - Fixed Envelope fitting so the red curve is fitted from the selected upper-crest coordinates, not from local peak-to-valley prominence amplitudes.
