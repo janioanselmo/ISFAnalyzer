@@ -155,7 +155,7 @@ def render_envelope_page(
     )
     auto_cols[4].info(
         "O gráfico mostra a onda completa. O app marca máximos dominantes e, por padrão, "
-        "seleciona os 3 picos finais do sinal para a envoltória em vermelho."
+        "seleciona os 3 picos finais do sinal para a envoltória em vermelho; a linha passa pelos máximos selecionados."
     )
 
     option_cols = st.columns([1, 1, 4])
@@ -327,7 +327,7 @@ def render_envelope_page(
 
         st.caption(
             "No gráfico do Envelope a onda completa permanece desenhada. "
-            "As marcações aparecem somente nas cristas/máximos locais relevantes; vermelho indica os picos usados no ajuste."
+            "As marcações aparecem somente nas cristas/máximos locais relevantes; vermelho indica os picos usados na envoltória."
         )
 
         if any(df.empty for df in peaks_by_file.values()):
@@ -369,7 +369,7 @@ def render_envelope_page(
                 st.session_state[_multi_image_click_version_key()] = 0
 
             st.caption(
-                "A legenda das curvas fica dentro do gráfico; vermelho indica os picos selecionados para o ajuste."
+                "A legenda das curvas fica dentro do gráfico; vermelho indica os máximos selecionados e a envoltória passando por eles."
             )
             click_img, peak_pixels = build_multi_clickable_waveform_image(
                 selected_items,
@@ -423,7 +423,7 @@ def render_envelope_page(
         st.markdown("**3) Envoltórias calculadas**")
         st.caption(
             "Este item permanece separado como resumo/comparação numérica. "
-            "Quando há ajuste válido, a mesma envoltória também aparece como linha vermelha no gráfico do item 2."
+            "Quando há seleção válida, a mesma envoltória visual também aparece como linha vermelha no gráfico do item 2, passando pelos picos selecionados. As métricas tau/R² continuam no resumo numérico."
         )
 
         if len(envelope_rows) == 0:

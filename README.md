@@ -14,7 +14,7 @@ Aplicativo local em Python/Streamlit para análise de formas de onda Tektronix `
 
 O **ISF Analyzer** lê arquivos binários `.ISF` exportados por osciloscópios Tektronix, converte os dados para unidades físicas e oferece uma interface Streamlit para inspeção, comparação e extração de métricas de sinais pulsados. O fluxo principal foi pensado para análise de ringing/ringdown em janelas configuráveis, com seleção visual de picos e diagnóstico por arquivo.
 
-A versão `v0.5.2` mantém a arquitetura modular e corrige a envoltória para usar, por padrão, os 3 picos finais do sinal. A versão `v0.5.0` reorganizou o projeto em uma arquitetura modular inspirada em DDD/Clean Architecture: `app.py` é apenas o ponto de entrada; a leitura de arquivos fica em `infrastructure/`; os cálculos científicos em `domain/` e `application/`; e a interface Streamlit em `presentation/`.
+A versão `v0.5.4` mantém a arquitetura modular e ajusta a visualização da envoltória: a linha vermelha agora passa pelos máximos selecionados dos lóbulos ressonantes; as métricas exponenciais tau/R² continuam no resumo numérico. A versão `v0.5.0` reorganizou o projeto em uma arquitetura modular inspirada em DDD/Clean Architecture: `app.py` é apenas o ponto de entrada; a leitura de arquivos fica em `infrastructure/`; os cálculos científicos em `domain/` e `application/`; e a interface Streamlit em `presentation/`.
 
 ### Funcionalidades
 

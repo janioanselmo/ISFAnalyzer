@@ -1,6 +1,14 @@
 # Changelog
 
 
+## 0.5.4 - Peak-through visual envelope
+
+- Changed the Envelope overlay line so the red visual envelope passes through the exact selected crest maxima.
+- Kept the exponential regression for tau/R² numeric metrics, but no longer uses the regression curve as the only visual overlay when the measured peaks are not perfectly exponential.
+- Added exact selected peak coordinates to the envelope metrics dictionary for rendering and auditability.
+- Updated captions to distinguish the visual envelope through selected peaks from the exponential statistical fit.
+
+
 ## 0.5.3 - Raw lobe peak envelope refinement
 
 - Refined envelope peak detection so each candidate crest is mapped back to the raw waveform maximum inside its damped-sinusoid lobe.

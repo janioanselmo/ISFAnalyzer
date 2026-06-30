@@ -764,6 +764,16 @@ def fit_exponential_envelope(
         "meia_vida_us": half_life_us,
         "amplitude_final_predita": final_amp,
         "razao_final_inicial_predita": ratio_final_initial,
+        # Points used by the visual red envelope in the waveform plot.
+        # The exponential fit above remains available for tau/R² metrics, but
+        # the plotted envelope must visibly pass through the selected crest
+        # maxima. Therefore the renderer uses these exact coordinates.
+        "fit_points_us": [float(value) for value in t_us],
+        "fit_points_display_amplitude": [
+            float(value) for value in fit_df["amplitude"].to_numpy(dtype=float)
+        ],
+        "fit_points_amplitude": [float(value) for value in amp],
+        "visual_envelope_mode": "log-linear interpolation through selected crest maxima",
     }, fit_df
 
 
@@ -1152,7 +1162,80 @@ def _envelope_curve_points(
     end_us: float,
     n_points: int = 300,
 ) -> tuple[np.ndarray, np.ndarray]:
-    """Return absolute-time upper-envelope points for the context graph."""
+    """Return upper-envelope points for the context graph.
+
+    The numeric tau/R² values are calculated from an exponential regression,
+    but the red curve in the waveform view is a visual envelope and must pass
+    through the selected crest maxima. With three non-ideal experimental peaks,
+    a least-squares exponential generally cannot cross every point. For the
+    plot, use piecewise interpolation through the exact selected coordinates;
+    use log-linear interpolation when all selected crest amplitudes are
+    positive, otherwise fall back to linear interpolation.
+    """
+    point_times = np.asarray(envelope_metrics.get("fit_points_us", []), dtype=float)
+    point_amplitudes = np.asarray(
+        envelope_metrics.get("fit_points_display_amplitude", []),
+        dtype=float,
+    )
+
+    valid_points = np.isfinite(point_times) & np.isfinite(point_amplitudes)
+    point_times = point_times[valid_points]
+    point_amplitudes = point_amplitudes[valid_points]
+
+    if point_times.size >= 2:
+        order = np.argsort(point_times)
+        point_times = point_times[order]
+        point_amplitudes = point_amplitudes[order]
+
+        x_min = max(float(start_us), float(point_times[0]))
+        x_max = min(float(end_us), float(point_times[-1]))
+        if not np.isfinite(x_min) or not np.isfinite(x_max) or x_max <= x_min:
+            return np.array([], dtype=float), np.array([], dtype=float)
+
+        x_segments: list[np.ndarray] = []
+        y_segments: list[np.ndarray] = []
+        segment_count = max(8, int(n_points) // max(1, point_times.size - 1))
+
+        for left_t, right_t, left_y, right_y in zip(
+            point_times[:-1],
+            point_times[1:],
+            point_amplitudes[:-1],
+            point_amplitudes[1:],
+        ):
+            left_t = float(left_t)
+            right_t = float(right_t)
+            left_y = float(left_y)
+            right_y = float(right_y)
+            if right_t <= x_min or left_t >= x_max or right_t <= left_t:
+                continue
+
+            seg_start = max(x_min, left_t)
+            seg_end = min(x_max, right_t)
+            if seg_end <= seg_start:
+                continue
+
+            x_seg = np.linspace(seg_start, seg_end, segment_count)
+            if left_y > 0 and right_y > 0:
+                y_seg = np.exp(
+                    np.interp(
+                        x_seg,
+                        [left_t, right_t],
+                        [np.log(left_y), np.log(right_y)],
+                    )
+                )
+            else:
+                y_seg = np.interp(x_seg, [left_t, right_t], [left_y, right_y])
+
+            if x_segments:
+                x_seg = x_seg[1:]
+                y_seg = y_seg[1:]
+            x_segments.append(x_seg)
+            y_segments.append(y_seg)
+
+        if x_segments:
+            return np.concatenate(x_segments), np.concatenate(y_segments)
+
+    # Fallback for old cached sessions or older metrics dictionaries.
     tau_us = float(envelope_metrics.get("tau_us", np.nan))
     a0 = float(envelope_metrics.get("a0", np.nan))
     t0_us = float(envelope_metrics.get("t0_us", np.nan))
@@ -1377,7 +1460,7 @@ def build_multi_clickable_waveform_image(
     _draw_text(draw, (left, image_height - 32), "Tempo (us)")
     _draw_text(draw, (10, top - 28), "Amplitude")
     if envelope_metrics_by_file:
-        _draw_text(draw, (left + 120, image_height - 32), "linha vermelha = envoltória ajustada")
+        _draw_text(draw, (left + 120, image_height - 32), "linha vermelha = envoltória pelos picos")
     return img, peak_pixels
 
 

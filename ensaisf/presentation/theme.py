@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-APP_VERSION = "0.5.3-raw-lobe-peak-envelope"
+APP_VERSION = "0.5.4-peak-through-envelope"
 
 # Global color order used by all analysis screens.
 # 1st curve: orange, 2nd: blue. Additional curves use high-contrast,
